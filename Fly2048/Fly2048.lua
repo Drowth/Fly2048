@@ -14,6 +14,9 @@ local TILE_SIZE = 84
 local TILE_PAD = 10
 local HEADER_H = 66
 local FRAME_PAD = 14
+local BOARD_INNER_W = GRID * TILE_SIZE + (GRID - 1) * TILE_PAD  -- 366
+local LBOARD_GAP    = 10
+local LBOARD_X      = FRAME_PAD + BOARD_INNER_W + LBOARD_GAP     -- 390
 
 local ANIM_TIME = 0.10
 local POP_TIME  = 0.12
@@ -62,6 +65,24 @@ local KEYMAP = {
   ["W"] = "up", ["S"] = "down", ["A"] = "left", ["D"] = "right",
 }
 
+-- Guild / score-animation config
+local MSG_PREFIX            = "Fly2048"
+local GUILD_PANEL_W         = 200
+local GUILD_ROW_H           = 22
+local GUILD_ROW_PAD         = 4
+local GUILD_TITLE_H         = 36
+local GUILD_MAX_ROWS        = 10
+local LBOARD_ROW_TOP        = 120  -- px from frame top before first guild row
+local GUILD_PING_CD         = 30
+local GUILD_BROADCAST_DELAY = 3
+local GUILD_AUTO_INTERVAL   = 300  -- background re-ping every 5 minutes
+local GUILD_JITTER_MAX      = 2.0
+local DELTA_RISE_DIST       = 28
+local DELTA_DURATION        = 0.80
+local DELTA_STAGGER         = 0.10
+local ROLLUP_DURATION       = 0.50
+local LBOARD_SLIDE_DUR      = 0.30
+
 -- ==============================
 -- State
 -- ==============================
@@ -72,6 +93,9 @@ local state = {
   divineUsed = false, milestonesHit = {},
   pressureBeatT = 0, autoShown = false,
   lastChordIndex = 0,
+  scoreRollup = { active = false, fromVal = 0, toVal = 0, t = 0 },
+  lboardLastRanks = {},
+  guildPingCooldown = 0,
 }
 
 local ui = {
@@ -82,6 +106,8 @@ local ui = {
   pressureTex = nil, pressureA = 0,
   shake = { active = false, t = 0 },
   anim = { active = false, t = 0, movers = {}, pops = {}, spawns = {}, popActive = false, popT = 0, spawnActive = false, spawnT = 0 },
+  scoreDeltas = {},
+  guildRows = {}, pingBtn = nil, guildSortCache = {},
 }
 
 -- ==============================
@@ -157,10 +183,10 @@ local function HSVtoRGB(h, s, v)
   local q = v * (1 - f * s)
   local t = v * (1 - (1 - f) * s)
   i = i % 6
-  if i == 0 then return v, t, p 
-  elseif i == 1 then return q, v, p 
-  elseif i == 2 then return p, v, t 
-  elseif i == 3 then return p, q, v 
+  if i == 0 then return v, t, p
+  elseif i == 1 then return q, v, p
+  elseif i == 2 then return p, v, t
+  elseif i == 3 then return p, q, v
   elseif i == 4 then return t, p, v end
   return v, p, q
 end
@@ -318,23 +344,230 @@ end
 
 local function AnnounceScoreToGuild()
   local msg = ("Fly2048: I just scored %d! Try to beat it at %s"):format(state.score or 0, CURSE_URL)
-  if IsInGuild and IsInGuild() then 
-    SendChatMessage(msg, "GUILD") 
-  else 
-    if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage("Fly2048: Not in a guild.") end 
-    if ChatFrame_OpenChat then ChatFrame_OpenChat(msg) end 
+  if IsInGuild and IsInGuild() then
+    SendChatMessage(msg, "GUILD")
+  else
+    if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage("Fly2048: Not in a guild.") end
+    if ChatFrame_OpenChat then ChatFrame_OpenChat(msg) end
   end
 end
 
 local function PutCurseLinkInChat() if ChatFrame_OpenChat then ChatFrame_OpenChat("Fly2048 addon: " .. CURSE_URL) end end
 
+-- ==============================
+-- Guild Messaging
+-- ==============================
+local function GetLocalKey()
+  local name, realm = UnitName("player")
+  realm = realm or (GetRealmName and GetRealmName()) or (GetNormalizedRealmName and GetNormalizedRealmName()) or "Unknown"
+  return name .. "-" .. realm
+end
+
+local function BroadcastScore()
+  if not (IsInGuild and IsInGuild()) then return end
+  if not state.best or state.best <= 0 then return end
+  local msg = "SCORE:" .. state.best
+  if C_ChatInfo and C_ChatInfo.SendAddonMessage then
+    C_ChatInfo.SendAddonMessage(MSG_PREFIX, msg, "GUILD")
+  elseif SendAddonMessage then
+    SendAddonMessage(MSG_PREFIX, msg, "GUILD")
+  end
+end
+
+local function BroadcastRequest()
+  if not (IsInGuild and IsInGuild()) then return end
+  if C_ChatInfo and C_ChatInfo.SendAddonMessage then
+    C_ChatInfo.SendAddonMessage(MSG_PREFIX, "REQUEST", "GUILD")
+  elseif SendAddonMessage then
+    SendAddonMessage(MSG_PREFIX, "REQUEST", "GUILD")
+  end
+end
+
+local function AutoPing()
+  if not (IsInGuild and IsInGuild()) then return end
+  After(GUILD_BROADCAST_DELAY, function()
+    BroadcastRequest()
+    BroadcastScore()
+    if ui.pingBtn then ui.pingBtn:Disable() end
+    state.guildPingCooldown = GUILD_PING_CD
+    After(GUILD_PING_CD, function()
+      state.guildPingCooldown = 0
+      if ui.pingBtn and IsInGuild and IsInGuild() then ui.pingBtn:Enable() end
+    end)
+  end)
+end
+
+local RefreshLeaderboard  -- forward declaration
+
+local function HandleAddonMessage(prefix, msg, channel, senderFull)
+  if prefix ~= MSG_PREFIX then return end
+  if channel ~= "GUILD" then return end
+  local sender = senderFull or ""
+  if Ambiguate then sender = Ambiguate(senderFull, "none") end
+  if not sender:find("%-") then
+    local _, realm = UnitName("player")
+    realm = realm or (GetRealmName and GetRealmName()) or ""
+    sender = sender .. "-" .. realm
+  end
+  if sender == GetLocalKey() then return end
+  local score = tonumber(msg:match("^SCORE:(%d+)$"))
+  if score then
+    Fly2048DB.guildScores = Fly2048DB.guildScores or {}
+    local existing = Fly2048DB.guildScores[sender] or 0
+    if score > existing then
+      Fly2048DB.guildScores[sender] = score
+      RefreshLeaderboard()
+    end
+  elseif msg == "REQUEST" then
+    After(math.random() * GUILD_JITTER_MAX, BroadcastScore)
+  end
+end
+
+local function BuildSortedGuild()
+  local list = {}
+  local localKey = GetLocalKey()
+  Fly2048DB.guildScores = Fly2048DB.guildScores or {}
+  for k, v in pairs(Fly2048DB.guildScores) do
+    if k ~= localKey then
+      list[#list + 1] = { name = k, score = v, isLocal = false }
+    end
+  end
+  local displayScore = math.max(state.best or 0, state.score or 0)
+  if displayScore > 0 then
+    list[#list + 1] = { name = localKey, score = displayScore, isLocal = true }
+  end
+  table.sort(list, function(a, b)
+    if a.score ~= b.score then return a.score > b.score end
+    return a.name < b.name
+  end)
+  return list
+end
+
+local function GetRowTargetY(rank)
+  return -(FRAME_PAD + LBOARD_ROW_TOP + (rank - 1) * (GUILD_ROW_H + GUILD_ROW_PAD))
+end
+
+local function UpdateLeaderboardRowPositions(elapsed)
+  for _, row in ipairs(ui.guildRows) do
+    if row.sliding then
+      row.slideT = row.slideT + elapsed
+      local p = math.min(1, row.slideT / LBOARD_SLIDE_DUR)
+      local y = Lerp(row.fromY, row.targetY, EaseOutCubic(p))
+      row:ClearAllPoints()
+      row:SetPoint("TOPLEFT", ui.frame, "TOPLEFT", LBOARD_X + GUILD_ROW_PAD, y)
+      if p >= 1 then
+        row.sliding = false
+        row.fromY = row.targetY
+      end
+    end
+  end
+end
+
+RefreshLeaderboard = function()
+  if not ui.frame then return end
+  local sorted = BuildSortedGuild()
+  ui.guildSortCache = sorted
+  local localKey = GetLocalKey()
+
+  local newRanks = {}
+  for i, entry in ipairs(sorted) do newRanks[entry.name] = i end
+  local prevLocalRank = state.lboardLastRanks[localKey]
+
+  local n = math.min(#sorted, GUILD_MAX_ROWS)
+  for i = 1, #ui.guildRows do
+    local row = ui.guildRows[i]
+    if i <= n then
+      local entry = sorted[i]
+      local displayName = entry.name:match("^([^%-]+)") or entry.name
+      row.rankText:SetText(tostring(i))
+      row.nameText:SetText(displayName)
+      row.scoreText:SetText(tostring(entry.score))
+      if entry.isLocal then
+        row.rankText:SetTextColor(1, 0.84, 0)
+        row.nameText:SetTextColor(1, 0.84, 0)
+        row.scoreText:SetTextColor(1, 0.84, 0)
+      else
+        row.rankText:SetTextColor(0.55, 0.55, 0.55)
+        row.nameText:SetTextColor(0.88, 0.88, 0.88)
+        row.scoreText:SetTextColor(0.88, 0.88, 0.88)
+      end
+      local targetY = GetRowTargetY(i)
+      if entry.isLocal and prevLocalRank and prevLocalRank ~= i then
+        row.fromY = GetRowTargetY(prevLocalRank)
+        row.targetY = targetY
+        row.slideT = 0
+        row.sliding = true
+        row:ClearAllPoints()
+        row:SetPoint("TOPLEFT", ui.frame, "TOPLEFT", LBOARD_X + GUILD_ROW_PAD, row.fromY)
+      elseif not row.sliding then
+        row.fromY = targetY
+        row.targetY = targetY
+        row:ClearAllPoints()
+        row:SetPoint("TOPLEFT", ui.frame, "TOPLEFT", LBOARD_X + GUILD_ROW_PAD, targetY)
+      end
+      row:Show()
+    else
+      row:Hide()
+    end
+  end
+
+  state.lboardLastRanks = newRanks
+
+  if ui.pingBtn then
+    if state.guildPingCooldown > 0 or not (IsInGuild and IsInGuild()) then
+      ui.pingBtn:Disable()
+    else
+      ui.pingBtn:Enable()
+    end
+  end
+end
+
+-- ==============================
+-- Score Animations
+-- ==============================
+local function SpawnScoreDelta(gain)
+  if not ui.frame or not ui.scoreText then return end
+  local activeCount = #ui.scoreDeltas
+  local label = ui.frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+  label:SetTextColor(0.2, 1.0, 0.4, 1)
+  label:SetText("+" .. gain)
+  label:SetPoint("TOPLEFT", ui.scoreText, "TOPLEFT", 0, 0)
+  label:SetAlpha(1)
+  ui.scoreDeltas[#ui.scoreDeltas + 1] = {
+    label = label,
+    t = -(activeCount * DELTA_STAGGER),
+    duration = DELTA_DURATION,
+  }
+end
+
+local function StartScoreRollup(fromVal, toVal)
+  local r = state.scoreRollup
+  if r.active then
+    local p = math.min(1, r.t / ROLLUP_DURATION)
+    r.fromVal = math.floor(Lerp(r.fromVal, r.toVal, EaseOutCubic(p)))
+    r.toVal = toVal
+    r.t = 0
+  else
+    r.fromVal = fromVal
+    r.toVal = toVal
+    r.t = 0
+    r.active = true
+  end
+end
+
+-- ==============================
+-- Game Logic
+-- ==============================
 local function UpdateUI()
   if not ui.frame then return end
-  ui.scoreText:SetText(("Score: %d"):format(state.score))
+  if not state.scoreRollup.active then
+    ui.scoreText:SetText(("Score: %d"):format(state.score))
+  end
   ui.bestText:SetText(("Best: %d"):format(state.best))
-  local mute, auto = (Fly2048DB and Fly2048DB.mute) and "Muted" or "Sound on", (Fly2048DB and Fly2048DB.autopopup) and "Auto on" or "Auto off"
+  local mute = (Fly2048DB and Fly2048DB.mute) and "Muted" or "Sound on"
   if state.over then ui.statusText:SetText("Game Over. R restart. (" .. mute .. ")") ui.gameOverOverlay:Show() else ui.statusText:SetText("WASD/Arrows. R restart. (" .. mute .. ")") ui.gameOverOverlay:Hide() end
   if ui.resetBtn then if state.over or state.divineUsed then ui.resetBtn:Disable() else ui.resetBtn:Enable() end end
+  RefreshLeaderboard()
 end
 
 local function SpawnRandomTile()
@@ -350,10 +583,17 @@ local function ResetGame()
   state.tiles, state.nextId, state.score, state.over, state.inputLocked, state.queuedDir, state.divineUsed, state.milestonesHit, state.lastChordIndex = {}, 1, 0, false, false, nil, false, {}, 0
   state.best = tonumber(Fly2048DB.best) or 0
   state.runStartBest, state.newBestThisRun = state.best, false
+  state.scoreRollup = { active = false, fromVal = 0, toVal = 0, t = 0 }
+  state.lboardLastRanks = {}
   ClearGrid()
   ui.anim.active, ui.anim.t, ui.anim.movers, ui.anim.pops, ui.anim.spawns, ui.anim.popActive, ui.anim.spawnActive, ui.shake.active, ui.boardGlowA, ui.pressureA = false, 0, {}, {}, {}, false, false, false, 0, 0
   if ui.boardGlow then ui.boardGlow:SetColorTexture(1, 1, 1, 0) end
   if ui.pressureTex then ui.pressureTex:SetColorTexture(0.85, 0.10, 0.10, 0) end
+  for i = #ui.scoreDeltas, 1, -1 do
+    local d = ui.scoreDeltas[i]
+    if d.label then d.label:Hide() d.label:SetParent(nil) end
+    table.remove(ui.scoreDeltas, i)
+  end
   SpawnRandomTile() SpawnRandomTile() ApplyPressureVisuals() UpdateUI()
 end
 
@@ -422,48 +662,102 @@ local function CommitMove()
   end
   for _, t in ipairs(toDestroy) do DestroyTile(t) end
   if scoreGain > 0 then
+    local oldScore = state.score
     state.score = state.score + scoreGain
-    if state.score > state.best then state.best, Fly2048DB.best, state.newBestThisRun = state.score, state.score, true end
+    if state.score > state.best then
+      state.best, Fly2048DB.best, state.newBestThisRun = state.score, state.score, true
+      BroadcastScore()
+    end
+    SpawnScoreDelta(scoreGain)
+    StartScoreRollup(oldScore, state.score)
   end
   SpawnRandomTile() ApplyPressureVisuals()
   if not HasMoves() then state.over = true if state.newBestThisRun then PlaySFX(LEVELUP_SFX) else PlaySFX(GAMEOVER_SFX) end end
   UpdateUI() state.inputLocked = false
 end
 
+-- ==============================
+-- Main UI
+-- ==============================
 local function BuildUI()
   if ui.frame then return end
-  local w, h = FRAME_PAD*2 + (GRID*TILE_SIZE) + ((GRID-1)*TILE_PAD), FRAME_PAD*2 + HEADER_H + (GRID*TILE_SIZE) + ((GRID-1)*TILE_PAD)
+  local w = LBOARD_X + GUILD_PANEL_W + FRAME_PAD
+  local h = FRAME_PAD*2 + HEADER_H + BOARD_INNER_W
   local f = CreateFrame("Frame", "Fly2048Frame", UIParent, "BackdropTemplate")
   ui.frame = f f:SetSize(w, h) f:SetPoint("CENTER") f:SetMovable(true) f:EnableMouse(true) f:RegisterForDrag("LeftButton") f:SetScript("OnDragStart", f.StartMoving) f:SetScript("OnDragStop", f.StopMovingOrSizing) f:SetClampedToScreen(true)
   f:SetBackdrop({ bgFile = TEX_DIALOG_BG, edgeFile = TEX_DIALOG_EDGE, tile = true, tileSize = 32, edgeSize = 32, insets = { left = 11, right = 12, top = 12, bottom = 11 } })
   f:SetBackdropColor(1, 1, 1, 0.95)
   local dark = f:CreateTexture(nil, "BACKGROUND") dark:SetAllPoints(f) dark:SetColorTexture(0, 0, 0, 0.25)
   f:EnableKeyboard(true) f:SetPropagateKeyboardInput(false)
+  -- Left section: game title + instructions
   local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge") title:SetPoint("TOPLEFT", FRAME_PAD, -FRAME_PAD) title:SetText("Fly2048")
   CreateFrame("Button", nil, f, "UIPanelCloseButton"):SetPoint("TOPRIGHT", -2, -2)
-  ui.scoreText = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight") ui.scoreText:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -10)
-  ui.bestText = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight") ui.bestText:SetPoint("LEFT", ui.scoreText, "RIGHT", 18, 0)
-  ui.statusText = f:CreateFontString(nil, "OVERLAY", "GameFontDisable") ui.statusText:SetPoint("TOPLEFT", ui.scoreText, "BOTTOMLEFT", 0, -8)
-  ui.resetBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate") ui.resetBtn:SetSize(120, 22) ui.resetBtn:SetPoint("TOPRIGHT", -34, -38) ui.resetBtn:SetText("Divine Reset") ui.resetBtn:SetScript("OnClick", function() DoDivineReset() UpdateUI() end)
+  ui.statusText = f:CreateFontString(nil, "OVERLAY", "GameFontDisable") ui.statusText:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -8)
+
+  -- Vertical separator between board and right section
+  local sep = f:CreateTexture(nil, "BACKGROUND") sep:SetWidth(1) sep:SetPoint("TOPLEFT", f, "TOPLEFT", LBOARD_X - LBOARD_GAP/2, -FRAME_PAD) sep:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", LBOARD_X - LBOARD_GAP/2, FRAME_PAD) sep:SetColorTexture(1, 1, 1, 0.10)
+
+  -- Right section: score, divine reset, then guild leaderboard
+  local rTitle = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge") rTitle:SetPoint("TOPLEFT", f, "TOPLEFT", LBOARD_X, -FRAME_PAD) rTitle:SetText("Scores")
+  ui.scoreText = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight") ui.scoreText:SetPoint("TOPLEFT", f, "TOPLEFT", LBOARD_X + GUILD_ROW_PAD, -(FRAME_PAD + 28))
+  ui.bestText  = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")  ui.bestText:SetPoint("TOPLEFT", ui.scoreText, "BOTTOMLEFT", 0, -4)
+  ui.resetBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate") ui.resetBtn:SetSize(GUILD_PANEL_W - GUILD_ROW_PAD * 2, 22) ui.resetBtn:SetPoint("TOPLEFT", f, "TOPLEFT", LBOARD_X + GUILD_ROW_PAD, -(FRAME_PAD + 68)) ui.resetBtn:SetText("Divine Reset") ui.resetBtn:SetScript("OnClick", function() DoDivineReset() UpdateUI() end)
+  -- Thin separator between score block and guild rows
+  local rSep = f:CreateTexture(nil, "BACKGROUND") rSep:SetHeight(1) rSep:SetPoint("TOPLEFT", f, "TOPLEFT", LBOARD_X, -(FRAME_PAD + 96)) rSep:SetPoint("TOPRIGHT", f, "TOPRIGHT", -FRAME_PAD, -(FRAME_PAD + 96)) rSep:SetColorTexture(1, 1, 1, 0.12)
+  local guildLabel = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall") guildLabel:SetPoint("TOPLEFT", f, "TOPLEFT", LBOARD_X, -(FRAME_PAD + 102)) guildLabel:SetText("Guild") guildLabel:SetTextColor(0.7, 0.7, 0.7, 1)
+
+  ui.pingBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+  ui.pingBtn:SetSize(GUILD_PANEL_W - GUILD_ROW_PAD * 2, 22)
+  ui.pingBtn:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", LBOARD_X + GUILD_ROW_PAD, FRAME_PAD)
+  ui.pingBtn:SetText("Ping Guild")
+  ui.pingBtn:SetScript("OnClick", function()
+    if state.guildPingCooldown > 0 then return end
+    AutoPing()
+  end)
+
+  ui.guildRows = {}
+  for i = 1, GUILD_MAX_ROWS do
+    local row = CreateFrame("Frame", nil, f)
+    row:SetSize(GUILD_PANEL_W - GUILD_ROW_PAD * 2, GUILD_ROW_H)
+    local ty = GetRowTargetY(i)
+    row:SetPoint("TOPLEFT", f, "TOPLEFT", LBOARD_X + GUILD_ROW_PAD, ty)
+    row.fromY = ty row.targetY = ty row.sliding = false row.slideT = 0
+
+    if i % 2 == 0 then
+      local altBg = row:CreateTexture(nil, "BACKGROUND") altBg:SetAllPoints() altBg:SetColorTexture(1, 1, 1, 0.04)
+    end
+
+    row.rankText = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    row.rankText:SetPoint("LEFT", 0, 0) row.rankText:SetWidth(18) row.rankText:SetJustifyH("LEFT") row.rankText:SetTextColor(0.55, 0.55, 0.55)
+
+    row.nameText = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    row.nameText:SetPoint("LEFT", row.rankText, "RIGHT", 4, 0) row.nameText:SetWidth(96) row.nameText:SetJustifyH("LEFT") row.nameText:SetTextColor(0.88, 0.88, 0.88)
+
+    row.scoreText = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    row.scoreText:SetPoint("RIGHT", row, "RIGHT", -4, 0) row.scoreText:SetWidth(56) row.scoreText:SetJustifyH("RIGHT") row.scoreText:SetTextColor(0.88, 0.88, 0.88)
+
+    row:Hide()
+    ui.guildRows[i] = row
+  end
   ui.boardWrap = CreateFrame("Frame", nil, f) ui.boardWrap:SetPoint("TOPLEFT", FRAME_PAD, -(FRAME_PAD + HEADER_H)) ui.boardWrap:SetSize((GRID*TILE_SIZE)+((GRID-1)*TILE_PAD), (GRID*TILE_SIZE)+((GRID-1)*TILE_PAD))
   ui.board = CreateFrame("Frame", nil, ui.boardWrap, "BackdropTemplate") ui.board:SetAllPoints() ui.board:SetBackdrop({ bgFile = "Interface/Tooltips/UI-Tooltip-Background" }) ui.board:SetBackdropColor(0.06, 0.06, 0.06, 0.92)
   local p = ui.board:CreateTexture(nil, "BACKGROUND") p:SetTexture(TEX_PARCHMENT) p:SetAllPoints() p:SetAlpha(0.18)
   ui.pressureTex = ui.board:CreateTexture(nil, "OVERLAY") ui.pressureTex:SetAllPoints() ui.pressureTex:SetBlendMode("ADD") ui.pressureTex:SetColorTexture(0.85, 0.10, 0.10, 0)
   ui.boardGlow = ui.board:CreateTexture(nil, "OVERLAY") ui.boardGlow:SetAllPoints() ui.boardGlow:SetBlendMode("ADD") ui.boardGlow:SetColorTexture(1, 1, 1, 0)
   for r = 1, GRID do for c = 1, GRID do local cell = CreateFrame("Frame", nil, ui.board) cell:SetSize(TILE_SIZE, TILE_SIZE) local x, y = CellXY(r, c) cell:SetPoint("TOPLEFT", x, y) cell:CreateTexture(nil, "BACKGROUND"):SetAllPoints() cell:GetRegions():SetColorTexture(0.10, 0.11, 0.12, 0.62) end end
-  
-  -- Game Over Overlay (Modified for Dull Effect and Brag Button)
+
+  -- Game Over Overlay
   ui.gameOverOverlay = CreateFrame("Frame", nil, ui.board, "BackdropTemplate") ui.gameOverOverlay:SetAllPoints() ui.gameOverOverlay:SetFrameStrata("DIALOG") ui.gameOverOverlay:SetFrameLevel(ui.board:GetFrameLevel() + 10) ui.gameOverOverlay:Hide()
-  ui.gameOverOverlay:CreateTexture(nil, "BACKGROUND"):SetAllPoints() ui.gameOverOverlay:GetRegions():SetColorTexture(0, 0, 0, 0.82) -- Darker alpha for dulling
+  ui.gameOverOverlay:CreateTexture(nil, "BACKGROUND"):SetAllPoints() ui.gameOverOverlay:GetRegions():SetColorTexture(0, 0, 0, 0.82)
   local panel = CreateFrame("Frame", nil, ui.gameOverOverlay, "BackdropTemplate") panel:SetPoint("CENTER") panel:SetSize(280, 170) panel:SetBackdrop({ bgFile = TEX_DIALOG_BG, edgeFile = TEX_DIALOG_EDGE, tile = true, tileSize = 32, edgeSize = 32, insets = { left = 11, right = 12, top = 12, bottom = 11 } })
   local hdr = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge") hdr:SetPoint("TOP", 0, -16) hdr:SetText("Game Over")
   local scoreLine = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight") scoreLine:SetPoint("TOP", hdr, "BOTTOM", 0, -20)
   ui.gameOverOverlay:SetScript("OnShow", function() scoreLine:SetText(("Final score: %d"):format(state.score or 0)) end)
   ui.announceBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate") ui.announceBtn:SetSize(220, 22) ui.announceBtn:SetPoint("BOTTOM", 0, 50) ui.announceBtn:SetText("Brag to Guild") ui.announceBtn:SetScript("OnClick", AnnounceScoreToGuild)
   ui.curseBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate") ui.curseBtn:SetSize(220, 22) ui.curseBtn:SetPoint("BOTTOM", 0, 22) ui.curseBtn:SetText("Curse Page Link") ui.curseBtn:SetScript("OnClick", PutCurseLinkInChat)
-  
+
   f:SetScript("OnKeyDown", function(self, key)
-    if (ChatEdit_GetActiveWindow and ChatEdit_GetActiveWindow() and ChatEdit_GetActiveWindow():IsShown()) or (GetCurrentKeyBoardFocus() and GetCurrentKeyBoardFocus() ~= f) then return end
+    if ChatEdit_GetActiveWindow and ChatEdit_GetActiveWindow() and ChatEdit_GetActiveWindow():IsShown() then return end
     if key == "ESCAPE" then f:Hide() return elseif key == "R" then ResetGame() return end
     local dir = KEYMAP[key] if not dir or state.over then return end
     if state.inputLocked or ui.anim.active then state.queuedDir = dir return end
@@ -472,6 +766,17 @@ local function BuildUI()
   f:SetScript("OnShow", function() f:SetFrameStrata("DIALOG") f:SetFrameLevel(100) ApplyPressureVisuals() UpdateUI() end)
   f:SetScript("OnUpdate", function(_, elapsed)
     ApplyShake(elapsed) MaybeHeartbeat(elapsed)
+    -- Score roll-up animation
+    if state.scoreRollup.active then
+      state.scoreRollup.t = state.scoreRollup.t + elapsed
+      local rp = math.min(1, state.scoreRollup.t / ROLLUP_DURATION)
+      local displayed = math.floor(Lerp(state.scoreRollup.fromVal, state.scoreRollup.toVal, EaseOutCubic(rp)))
+      if ui.scoreText then ui.scoreText:SetText(("Score: %d"):format(displayed)) end
+      if rp >= 1 then
+        state.scoreRollup.active = false
+        if ui.scoreText then ui.scoreText:SetText(("Score: %d"):format(state.score)) end
+      end
+    end
     if ui.boardGlowA > 0 then ui.boardGlowA = math.max(0, ui.boardGlowA - elapsed * 1.6) ui.boardGlow:SetColorTexture(1, 1, 1, ui.boardGlowA) end
     for _, t in pairs(state.tiles) do if t.flashA > 0 then t.flashA = math.max(0, t.flashA - (elapsed / FLASH_TIME) * FLASH_ALPHA) t.flash:SetColorTexture(1, 1, 1, t.flashA) end end
     if ui.anim.active then
@@ -493,6 +798,23 @@ local function BuildUI()
       for _, tObj in ipairs(ui.anim.spawns) do if tObj.frame then tObj.frame:SetScale(Lerp(0.98, SPAWN_POP, EaseOutCubic(t))) end end
       if t >= 1 then for _, tObj in ipairs(ui.anim.spawns) do if tObj.frame then tObj.frame:SetScale(1) end end ui.anim.spawnActive, ui.anim.spawnT, ui.anim.spawns = false, 0, {} end
     end
+    -- Score delta floats (+N rise above score)
+    for i = #ui.scoreDeltas, 1, -1 do
+      local d = ui.scoreDeltas[i]
+      d.t = d.t + elapsed
+      if d.t < 0 then
+        d.label:SetAlpha(0)
+      elseif d.t >= d.duration then
+        d.label:Hide() d.label:SetParent(nil)
+        table.remove(ui.scoreDeltas, i)
+      else
+        local prog = d.t / d.duration
+        d.label:ClearAllPoints()
+        d.label:SetPoint("TOPLEFT", ui.scoreText, "TOPLEFT", 0, DELTA_RISE_DIST * EaseOutCubic(prog))
+        d.label:SetAlpha(1 - EaseOutCubic(prog))
+      end
+    end
+    UpdateLeaderboardRowPositions(elapsed)
     if not state.over and not state.inputLocked and not ui.anim.active and state.queuedDir then local d = state.queuedDir state.queuedDir = nil ApplyMovePlan(d) end
   end)
   f:Hide()
@@ -505,22 +827,56 @@ SlashCmdList["FLY2048"] = function(msg)
   msg = (msg or ""):lower()
   if msg == "reset" or msg == "r" then BuildUI() ResetGame() ui.frame:Show() state.autoShown = false return
   elseif msg == "mute" then Fly2048DB.mute = not Fly2048DB.mute UpdateUI() return
-  elseif msg == "auto" then Fly2048DB.autopopup = (Fly2048DB.autopopup ~= true) UpdateUI() return end
+  elseif msg == "auto" then Fly2048DB.autopopup = (Fly2048DB.autopopup ~= true) UpdateUI() return
+  elseif msg == "test" then
+    BuildUI()
+    local realm = (GetRealmName and GetRealmName()) or "Test"
+    local fakes = { {"Arthas", 8192}, {"Sylvanas", 4096}, {"Thrall", 2048}, {"Jaina", 1024}, {"Garrosh", 512} }
+    Fly2048DB.guildScores = Fly2048DB.guildScores or {}
+    for _, pair in ipairs(fakes) do Fly2048DB.guildScores[pair[1] .. "-" .. realm] = pair[2] end
+    RefreshLeaderboard()
+    ui.frame:Show()
+    DEFAULT_CHAT_FRAME:AddMessage("Fly2048: test scores injected — use '/fly2048 testclear' to remove them.")
+    return
+  elseif msg == "testclear" then
+    Fly2048DB.guildScores = {}
+    if ui.frame then RefreshLeaderboard() end
+    DEFAULT_CHAT_FRAME:AddMessage("Fly2048: test scores cleared.")
+    return
+  end
   Toggle()
 end
 
 local boot = CreateFrame("Frame")
 boot:RegisterEvent("ADDON_LOADED")
-boot:SetScript("OnEvent", function(self, event, name)
-  if event == "ADDON_LOADED" and name == ADDON_NAME then
+boot:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4)
+  if event == "ADDON_LOADED" and arg1 == ADDON_NAME then
     Fly2048DB.best, Fly2048DB.mute, Fly2048DB.autopopup = tonumber(Fly2048DB.best) or 0, (Fly2048DB.mute == true), (Fly2048DB.autopopup ~= false)
+    Fly2048DB.guildScores = Fly2048DB.guildScores or {}
     state.best = Fly2048DB.best
+    if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then
+      C_ChatInfo.RegisterAddonMessagePrefix(MSG_PREFIX)
+    elseif RegisterAddonMessagePrefix then
+      RegisterAddonMessagePrefix(MSG_PREFIX)
+    end
     BuildUI()
     self:RegisterEvent("PLAYER_CONTROL_LOST") self:RegisterEvent("PLAYER_CONTROL_GAINED") self:RegisterEvent("PLAYER_ENTERING_WORLD")
+    self:RegisterEvent("CHAT_MSG_ADDON")
+    AutoPing()
+    if C_Timer and C_Timer.NewTicker then
+      C_Timer.NewTicker(GUILD_AUTO_INTERVAL, function() AutoPing() end)
+    else
+      local function scheduleNext() After(GUILD_AUTO_INTERVAL, function() AutoPing() scheduleNext() end) end
+      scheduleNext()
+    end
+    return
+  end
+  if event == "CHAT_MSG_ADDON" then
+    HandleAddonMessage(arg1, arg2, arg3, arg4)
     return
   end
   if not Fly2048DB or Fly2048DB.autopopup ~= true then return end
   if event == "PLAYER_CONTROL_LOST" then After(0.20, function() if UnitOnTaxi and UnitOnTaxi("player") then if not ui.frame:IsShown() then if not next(state.tiles) then ResetGame() end ui.frame:Show() end state.autoShown = true end end)
   elseif event == "PLAYER_CONTROL_GAINED" then After(0.10, function() if not (UnitOnTaxi and UnitOnTaxi("player")) and state.autoShown then if ui.frame then ui.frame:Hide() end state.autoShown = false end end)
-  elseif event == "PLAYER_ENTERING_WORLD" then After(0.50, function() if UnitOnTaxi and UnitOnTaxi("player") then if not ui.frame:IsShown() then if not next(state.tiles) then ResetGame() end ui.frame:Show() end state.autoShown = true else if state.autoShown then if ui.frame then ui.frame:Hide() end state.autoShown = false end end end) end
+  elseif event == "PLAYER_ENTERING_WORLD" then AutoPing() After(0.50, function() if UnitOnTaxi and UnitOnTaxi("player") then if not ui.frame:IsShown() then if not next(state.tiles) then ResetGame() end ui.frame:Show() end state.autoShown = true else if state.autoShown then if ui.frame then ui.frame:Hide() end state.autoShown = false end end end) end
 end)
