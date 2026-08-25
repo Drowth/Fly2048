@@ -1,10 +1,8 @@
-## Interface: 20505
+## Interface: 20506
 ## Title: Fly2048
 ## Notes: A small 2048 mini game for downtime (flying, queues)
-## Author: You
-## Version: 1.0.2
+## Author: LeeGrieve
+## Version: 1.0.3
 ## SavedVariables: Fly2048DB
-
-## OptionalDependencies: 
 
 Fly2048.lua
