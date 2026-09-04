@@ -1,9 +1,13 @@
-## Interface: 20506
+## Interface: 120100
 ## Title: Fly2048
 ## Notes: A polished 2048 mini game for flights, queues, and downtime
 ## Author: LeeGrieve
 ## Version: 1.1.0-beta.1
+## Category: Other
 ## IconTexture: Interface\Icons\INV_Misc_Dice_02
 ## SavedVariables: Fly2048DB
+## AddonCompartmentFunc: Fly2048_OnAddonCompartmentClick
+## AddonCompartmentFuncOnEnter: Fly2048_OnAddonCompartmentEnter
+## AddonCompartmentFuncOnLeave: Fly2048_OnAddonCompartmentLeave
 
 Fly2048.lua
