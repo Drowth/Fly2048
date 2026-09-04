@@ -12,15 +12,32 @@ except ImportError:
 ROOT = Path(__file__).resolve().parents[1]
 lua = LuaRuntime(unpack_returned_tuples=True)
 lua.execute((ROOT / "tests" / "wow_stub.lua").read_text(encoding="utf-8"))
+# Pre-seed a 1.1 saved theme so the faction migration path is exercised.
+lua.execute('Fly2048DB = { theme = "arcane" }')
 lua.execute((ROOT / "Fly2048" / "Fly2048.lua").read_text(encoding="utf-8"))
 
 trigger_event = lua.globals().Fly2048_TestTriggerEvent
 run_updates = lua.globals().Fly2048_TestRunUpdates
+run_timers = lua.globals().Fly2048_TestRunTimers
 slash = lua.globals().SlashCmdList["FLY2048"]
 
 trigger_event("ADDON_LOADED", "Fly2048")
 trigger_event("PLAYER_ENTERING_WORLD")
 slash("")
+
+db = lua.globals().Fly2048DB
+assert db.theme == "horde", f"expected faction default theme, got {db.theme!r}"
+assert db.schemaVersion == 3, f"expected schema 3, got {db.schemaVersion!r}"
+assert "Fly2048Frame" in list(lua.globals().UISpecialFrames.values()), "frame not registered for Esc"
+
+# Guild messages: class-tagged, legacy, and a request that triggers a reply.
+trigger_event("CHAT_MSG_ADDON", "Fly2048", "SCORE:5000:MAGE", "GUILD", "Arthas-TestRealm")
+trigger_event("CHAT_MSG_ADDON", "Fly2048", "SCORE:4000", "GUILD", "Thrall-TestRealm")
+trigger_event("CHAT_MSG_ADDON", "Fly2048", "REQUEST", "GUILD", "Jaina-TestRealm")
+run_timers(10)
+assert db.guildScores["Arthas-TestRealm"] == 5000
+assert db.guildClasses["Arthas-TestRealm"] == "MAGE"
+assert db.guildScores["Thrall-TestRealm"] == 4000
 
 frame = lua.globals().Fly2048Frame
 for key in ("LEFT", "UP", "RIGHT", "DOWN", "A", "W", "D", "S"):
@@ -28,8 +45,9 @@ for key in ("LEFT", "UP", "RIGHT", "DOWN", "A", "W", "D", "S"):
     run_updates(4, 0.05)
 
 for command in (
-    "theme ember",
-    "theme arcane",
+    "theme alliance",
+    "theme horde",
+    "theme",
     "motion reduced",
     "motion full",
     "scale 0.90",
@@ -44,6 +62,12 @@ for command in (
 ):
     slash(command)
     run_updates(3, 0.05)
+
+# Hidden corner button: sets the flag, then the tune fires on the next first open.
+assert not db.lostAtSea
+frame.Trigger(frame, "OnShow")
+frame.Trigger(frame, "OnShow")
+slash("lostatsea"); assert db.lostAtSea; slash("lostatsea"); assert not db.lostAtSea
 
 lua.globals().Fly2048_OnAddonCompartmentClick("Fly2048", "LeftButton")
 lua.globals().Fly2048_OnAddonCompartmentClick("Fly2048", lua.table_from({"buttonName": "RightButton"}))

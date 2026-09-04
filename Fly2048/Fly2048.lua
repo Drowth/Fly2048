@@ -12,11 +12,12 @@ local ADDON_NAME = "Fly2048"
 local GRID = 4
 local TILE_SIZE = 84
 local TILE_PAD = 10
-local HEADER_H = 78
-local FRAME_PAD = 16
+local HEADER_H = 92          -- header plate overhang + button row + status line
+local FRAME_PAD = 24         -- 11px dialog-border inset + breathing room
 local BOARD_INNER_W = GRID * TILE_SIZE + (GRID - 1) * TILE_PAD  -- 366
-local LBOARD_GAP    = 12
-local LBOARD_X      = FRAME_PAD + BOARD_INNER_W + LBOARD_GAP
+local LBOARD_GAP    = 14
+local LBOARD_X      = FRAME_PAD + BOARD_INNER_W + LBOARD_GAP     -- 404
+local SLOT_SCALE    = 1.30   -- UI-EmptySlot has transparent padding; tune 1.25-1.75 in-game
 
 local ANIM_TIME = 0.10
 local POP_TIME  = 0.12
@@ -32,59 +33,90 @@ local SHAKE_AMP = 3
 
 local WHITE_TEXTURE = "Interface\\Buttons\\WHITE8X8"
 
--- All visual decisions live here so a theme can be changed without touching
--- gameplay code. Values are RGBA in the same 0..1 range used by the WoW API.
+-- Blizzard art that ships in both Classic Anniversary (TBC) and Retail.
+local TEX = {
+  frameBg   = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
+  frameEdge = "Interface\\DialogFrame\\UI-DialogBox-Border",
+  header    = "Interface\\DialogFrame\\UI-DialogBox-Header",
+  panelBg   = "Interface\\Tooltips\\UI-Tooltip-Background",
+  panelEdge = "Interface\\Tooltips\\UI-Tooltip-Border",
+  slot      = "Interface\\Buttons\\UI-EmptySlot",
+  glow      = "Interface\\Buttons\\UI-ActionButton-Border",
+  star      = "Interface\\Cooldown\\star4",
+  crown     = "Interface\\GroupFrame\\UI-Group-LeaderIcon",
+  dice      = "Interface\\Icons\\INV_Misc_Dice_02",
+}
+local BACKDROP_DIALOG = {
+  bgFile = TEX.frameBg, edgeFile = TEX.frameEdge, tile = true, tileSize = 32, edgeSize = 32,
+  insets = { left = 11, right = 12, top = 12, bottom = 11 },
+}
+local BACKDROP_TOOLTIP = {
+  bgFile = TEX.panelBg, edgeFile = TEX.panelEdge, tile = true, tileSize = 16, edgeSize = 16,
+  insets = { left = 4, right = 4, top = 4, bottom = 4 },
+}
+
+-- Item quality colours (index = Enum.ItemQuality). ITEM_QUALITY_COLORS wins when present.
+local QUALITY_COLORS = {
+  [0] = { 0.62, 0.62, 0.62 }, [1] = { 1.00, 1.00, 1.00 }, [2] = { 0.12, 1.00, 0.00 },
+  [3] = { 0.00, 0.44, 0.87 }, [4] = { 0.64, 0.21, 0.93 }, [5] = { 1.00, 0.50, 0.00 },
+  [6] = { 0.90, 0.80, 0.50 }, [7] = { 0.00, 0.80, 1.00 },
+}
+
+-- Every tile is a piece of loot: an icon plus an item quality. Pairs of values
+-- share a quality; the lower of each pair is drawn dimmed.
+local ICON = "Interface\\Icons\\"
+local TILE_LOOT = {
+  [2]    = { icon = ICON .. "INV_Misc_Coin_05",           quality = 0, dim = false }, -- copper, Poor
+  [4]    = { icon = ICON .. "INV_Misc_Coin_03",           quality = 1, dim = false }, -- silver, Common
+  [8]    = { icon = ICON .. "INV_Misc_Coin_01",           quality = 2, dim = true  }, -- gold, Uncommon
+  [16]   = { icon = ICON .. "INV_Misc_Gem_Emerald_02",    quality = 2, dim = false },
+  [32]   = { icon = ICON .. "INV_Misc_Gem_Sapphire_02",   quality = 3, dim = true  }, -- Rare
+  [64]   = { icon = ICON .. "INV_Misc_Orb_05",            quality = 3, dim = false },
+  [128]  = { icon = ICON .. "INV_Misc_Gem_Amethyst_02",   quality = 4, dim = true  }, -- Epic
+  [256]  = { icon = ICON .. "INV_Misc_QirajiCrystal_05",  quality = 4, dim = false },
+  [512]  = { icon = ICON .. "INV_Hammer_Unique_Sulfuras", quality = 5, dim = true  }, -- Legendary
+  [1024] = { icon = ICON .. "INV_Sword_39",               quality = 5, dim = false }, -- Thunderfury
+  [2048] = { icon = ICON .. "INV_Staff_13",               quality = 6, dim = false }, -- Atiesh, Artifact
+  [4096] = { icon = ICON .. "INV_Misc_Head_Dragon_01",    quality = 7, dim = true  }, -- Heirloom
+  [8192] = { icon = ICON .. "INV_Misc_Head_Dragon_Black", quality = 7, dim = false },
+}
+local TILE_LOOT_DEFAULT = { icon = ICON .. "Spell_Fire_Fire", quality = 7, dim = false }
+
+-- Faction themes tint the Blizzard textures. Keys accent/accentSoft/gold/text/
+-- muted/danger/success are used by animations and text throughout.
 local THEMES = {
-  arcane = {
-    name = "Arcane",
-    frame = { 0.035, 0.059, 0.090, 0.98 },
-    panel = { 0.055, 0.098, 0.140, 0.96 },
-    panelAlt = { 0.075, 0.128, 0.174, 0.92 },
-    board = { 0.025, 0.047, 0.070, 1.00 },
-    cell = { 0.105, 0.165, 0.210, 0.72 },
-    border = { 0.170, 0.300, 0.390, 0.90 },
-    accent = { 0.350, 0.850, 0.910, 1.00 },
-    accentSoft = { 0.180, 0.480, 0.560, 0.45 },
-    gold = { 0.960, 0.750, 0.250, 1.00 },
-    text = { 0.925, 0.960, 0.980, 1.00 },
-    muted = { 0.520, 0.640, 0.710, 1.00 },
-    danger = { 0.960, 0.300, 0.360, 1.00 },
-    success = { 0.350, 0.920, 0.650, 1.00 },
-    tiles = {
-      [2] = { 0.150, 0.285, 0.410, 1 }, [4] = { 0.145, 0.390, 0.500, 1 },
-      [8] = { 0.105, 0.500, 0.520, 1 }, [16] = { 0.140, 0.600, 0.430, 1 },
-      [32] = { 0.390, 0.660, 0.300, 1 }, [64] = { 0.700, 0.640, 0.210, 1 },
-      [128] = { 0.820, 0.480, 0.190, 1 }, [256] = { 0.830, 0.285, 0.180, 1 },
-      [512] = { 0.720, 0.190, 0.330, 1 }, [1024] = { 0.490, 0.250, 0.700, 1 },
-      [2048] = { 0.920, 0.680, 0.150, 1 }, [4096] = { 0.780, 0.780, 0.900, 1 },
-    },
+  alliance = {
+    name = "Alliance", subtitle = "FOR THE ALLIANCE!",
+    crest = "Interface\\Timer\\Alliance-Logo",
+    frameBg = { 0.55, 0.65, 1.00, 1 }, frameEdge = { 1, 1, 1, 1 },
+    panel = { 0.16, 0.24, 0.48, 0.94 }, panelAlt = { 0.22, 0.32, 0.60, 0.94 }, board = { 0.07, 0.10, 0.22, 1 },
+    border = { 0.85, 0.70, 0.30, 1 },
+    cell = { 0.78, 0.86, 1.00, 1 },
+    accent = { 0.40, 0.65, 1.00, 1 }, accentSoft = { 0.25, 0.40, 0.75, 0.45 },
+    gold = { 1.00, 0.82, 0.00, 1 }, text = { 1, 1, 1, 1 }, muted = { 0.70, 0.76, 0.90, 1 },
+    danger = { 1.00, 0.25, 0.25, 1 }, success = { 0.30, 0.95, 0.45, 1 },
   },
-  ember = {
-    name = "Ember",
-    frame = { 0.080, 0.045, 0.035, 0.98 },
-    panel = { 0.135, 0.070, 0.045, 0.96 },
-    panelAlt = { 0.180, 0.095, 0.055, 0.92 },
-    board = { 0.055, 0.030, 0.025, 1.00 },
-    cell = { 0.220, 0.120, 0.075, 0.68 },
-    border = { 0.420, 0.205, 0.105, 0.90 },
-    accent = { 1.000, 0.500, 0.190, 1.00 },
-    accentSoft = { 0.650, 0.250, 0.080, 0.38 },
-    gold = { 1.000, 0.780, 0.260, 1.00 },
-    text = { 1.000, 0.945, 0.875, 1.00 },
-    muted = { 0.720, 0.560, 0.440, 1.00 },
-    danger = { 1.000, 0.220, 0.180, 1.00 },
-    success = { 0.620, 0.900, 0.360, 1.00 },
-    tiles = {
-      [2] = { 0.270, 0.180, 0.130, 1 }, [4] = { 0.390, 0.235, 0.135, 1 },
-      [8] = { 0.550, 0.300, 0.120, 1 }, [16] = { 0.700, 0.350, 0.100, 1 },
-      [32] = { 0.820, 0.310, 0.100, 1 }, [64] = { 0.900, 0.220, 0.100, 1 },
-      [128] = { 0.780, 0.160, 0.160, 1 }, [256] = { 0.650, 0.130, 0.260, 1 },
-      [512] = { 0.550, 0.190, 0.430, 1 }, [1024] = { 0.450, 0.250, 0.620, 1 },
-      [2048] = { 0.950, 0.650, 0.120, 1 }, [4096] = { 0.980, 0.820, 0.330, 1 },
-    },
+  horde = {
+    name = "Horde", subtitle = "FOR THE HORDE!",
+    crest = "Interface\\Timer\\Horde-Logo",
+    frameBg = { 1.00, 0.45, 0.40, 1 }, frameEdge = { 1, 1, 1, 1 },
+    panel = { 0.30, 0.08, 0.06, 0.94 }, panelAlt = { 0.42, 0.11, 0.08, 0.94 }, board = { 0.10, 0.03, 0.03, 1 },
+    border = { 0.75, 0.25, 0.15, 1 },
+    cell = { 1.00, 0.80, 0.75, 1 },
+    accent = { 1.00, 0.35, 0.20, 1 }, accentSoft = { 0.65, 0.15, 0.10, 0.45 },
+    gold = { 1.00, 0.82, 0.00, 1 }, text = { 1, 1, 1, 1 }, muted = { 0.85, 0.70, 0.65, 1 },
+    danger = { 1.00, 0.20, 0.20, 1 }, success = { 0.55, 0.95, 0.30, 1 },
   },
 }
-local THEME_ORDER = { "arcane", "ember" }
+local THEME_ORDER = { "alliance", "horde" }
+
+local CLASS_COLORS_FALLBACK = {
+  WARRIOR = { 0.78, 0.61, 0.43 }, PALADIN = { 0.96, 0.55, 0.73 }, HUNTER = { 0.67, 0.83, 0.45 },
+  ROGUE = { 1.00, 0.96, 0.41 }, PRIEST = { 1.00, 1.00, 1.00 }, SHAMAN = { 0.00, 0.44, 0.87 },
+  MAGE = { 0.25, 0.78, 0.92 }, WARLOCK = { 0.53, 0.53, 0.93 }, DRUID = { 1.00, 0.49, 0.04 },
+  DEATHKNIGHT = { 0.77, 0.12, 0.23 }, MONK = { 0.00, 1.00, 0.59 }, DEMONHUNTER = { 0.64, 0.19, 0.79 },
+  EVOKER = { 0.20, 0.58, 0.50 },
+}
 
 -- Custom Sound Path
 local SOUND_PATH = "Interface\\AddOns\\Fly2048\\media\\sound\\"
@@ -97,20 +129,22 @@ local CHORDS = {
   SOUND_PATH .. "g4.ogg",
 }
 
-local LEVELUP_SFX  = "Sound\\Interface\\LevelUp.ogg"
-local GAMEOVER_SFX = "Sound\\Interface\\igQuestFailed.ogg"
-local PRESSURE_HEARTBEAT_SFX = "Sound\\Interface\\iAbilitiesTurnPageA.ogg"
+-- Blizzard sounds: SOUNDKIT name first, numeric kit id second, legacy file path last.
+local SOUNDS = {
+  click     = { kit = "IG_MAINMENU_OPTION_CHECKBOX_ON", id = 856,  file = "Sound\\Interface\\igMainMenuOptionCheckBoxOn.ogg" },
+  levelUp   = { kit = "LEVEL_UP",                       id = 888,  file = "Sound\\Interface\\LevelUp.ogg" },
+  gameOver  = { kit = "IG_QUEST_FAILED",                id = 846,  file = "Sound\\Interface\\igQuestFailed.ogg" },
+  heartbeat = { kit = "IG_ABILITY_PAGE_TURN",           id = 836,  file = "Sound\\Interface\\iAbilitiesTurnPageA.ogg" },
+  ping      = { kit = "MAP_PING",                       id = 3175, file = "Sound\\Interface\\MapPing.ogg" },
+  warning   = { kit = "RAID_WARNING",                   id = 8959, file = "Sound\\Interface\\RaidWarning.ogg" },
+}
 local PRESSURE_BEAT_INTERVAL = 1.00
 
+-- Hidden corner button. Once pressed, the tune plays on the first open of every session.
+local SEA_SONG = SOUND_PATH .. "lost_at_sea.ogg"
+
 local MILESTONE_VALUES = { 512, 1024, 2048, 4096 }
-local MILESTONE_SFX_512  = "Sound\\Interface\\MapPing.ogg"
-local MILESTONE_SFX_2048 = "Sound\\Interface\\RaidWarning.ogg"
-
-local DIVINE_RESET_SFX = "Sound\\Interface\\igMainMenuOptionCheckBoxOn.ogg"
 local CURSE_URL = "https://www.curseforge.com/wow/addons/fly2048"
-
-local TEX_BORDER_GLOW = "Interface\\Buttons\\UI-ActionButton-Border"
-local TEX_STAR        = "Interface\\Cooldown\\star4"
 
 local KEYMAP = {
   ["UP"] = "up", ["DOWN"] = "down", ["LEFT"] = "left", ["RIGHT"] = "right",
@@ -121,9 +155,9 @@ local KEYMAP = {
 local MSG_PREFIX            = "Fly2048"
 local GUILD_PANEL_W         = 224
 local GUILD_ROW_H           = 22
-local GUILD_ROW_PAD         = 5
+local GUILD_ROW_PAD         = 4
 local GUILD_MAX_ROWS        = 10
-local LBOARD_ROW_TOP        = 152  -- px below the outer frame padding
+local LBOARD_ROW_TOP        = 160  -- px below the outer frame padding (inside the flightboard panel)
 local GUILD_PING_CD         = 30
 local GUILD_BROADCAST_DELAY = 3
 local GUILD_AUTO_INTERVAL   = 300  -- background re-ping every 5 minutes
@@ -148,6 +182,7 @@ local state = {
   scoreRollup = { active = false, fromVal = 0, toVal = 0, t = 0 },
   lboardLastRanks = {},
   guildPingCooldown = 0,
+  seaSongPlayed = false,
 }
 
 local ui = {
@@ -177,12 +212,50 @@ local function Clamp(n, a, b) return n < a and a or (n > b and b or n) end
 local function Lerp(a, b, t) return a + (b - a) * t end
 local function EaseOutCubic(t) local p = 1 - t return 1 - (p * p * p) end
 local function CellXY(r, c) return (c - 1) * (TILE_SIZE + TILE_PAD), -((r - 1) * (TILE_SIZE + TILE_PAD)) end
-local function Log2(x) return math.log(x) / math.log(2) end
 local function RandomTileValue() return math.random() < 0.10 and 4 or 2 end
 
+local function PlayerFaction()
+  if not UnitFactionGroup then return nil end
+  local faction = UnitFactionGroup("player")
+  if faction == "Horde" or faction == "Alliance" then return faction end
+  return nil
+end
+
+local function DefaultThemeKey()
+  return PlayerFaction() == "Horde" and "horde" or "alliance"
+end
+
 local function GetTheme()
-  local key = Fly2048DB and Fly2048DB.theme or "arcane"
-  return THEMES[key] or THEMES.arcane
+  local key = Fly2048DB and Fly2048DB.theme
+  return THEMES[key] or THEMES[DefaultThemeKey()]
+end
+
+local function QualityColor(quality, dim)
+  local live = ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[quality]
+  local fallback = QUALITY_COLORS[quality] or QUALITY_COLORS[1]
+  local r = live and live.r or fallback[1]
+  local g = live and live.g or fallback[2]
+  local b = live and live.b or fallback[3]
+  if dim then r, g, b = r * 0.62, g * 0.62, b * 0.62 end
+  return r, g, b
+end
+
+local function GetTileLoot(value) return TILE_LOOT[value] or TILE_LOOT_DEFAULT end
+
+local function ClassColor(classFile)
+  if not classFile then return nil end
+  local live = (CUSTOM_CLASS_COLORS or RAID_CLASS_COLORS)
+  live = live and live[classFile]
+  if live and live.r then return { live.r, live.g, live.b, 1 } end
+  local fallback = CLASS_COLORS_FALLBACK[classFile]
+  if fallback then return { fallback[1], fallback[2], fallback[3], 1 } end
+  return nil
+end
+
+local function LocalClassFile()
+  if not UnitClass then return nil end
+  local _, classFile = UnitClass("player")
+  return classFile
 end
 
 local function SetTextureColor(texture, color, alpha)
@@ -216,9 +289,18 @@ local function FormatNumber(value)
   return tostring(math.floor(value))
 end
 
-local function PlaySFX(path, channel)
+local function PlayKit(key)
   if Fly2048DB and Fly2048DB.mute then return end
-  PlaySoundFile(path, channel or "SFX")
+  local sound = SOUNDS[key]
+  if not sound then return end
+  local id = (SOUNDKIT and SOUNDKIT[sound.kit]) or sound.id
+  if PlaySound and id then PlaySound(id, "SFX") else PlaySoundFile(sound.file, "SFX") end
+end
+
+local function PlaySeaSong()
+  if Fly2048DB and Fly2048DB.mute then return end
+  state.seaSongPlayed = true
+  PlaySoundFile(SEA_SONG, "SFX")
 end
 
 local function After(delay, fn)
@@ -265,66 +347,34 @@ local function DestroyTile(tile)
   if tile.frame then tile.frame:ClearAllPoints() tile.frame:Hide() tile.frame:SetParent(nil) end
 end
 
-local function TileColor(v)
-  local theme = GetTheme()
-  local color = theme.tiles[v]
-  if color then return color[1], color[2], color[3], color[4] end
-
-  -- Values above the authored palette become increasingly luminous legendary
-  -- tiles instead of falling back to an unrelated procedural rainbow.
-  local t = Clamp((Log2(v) - 12) / 5, 0, 1)
-  return Lerp(theme.gold[1], theme.text[1], t),
-         Lerp(theme.gold[2], theme.text[2], t),
-         Lerp(theme.gold[3], theme.text[3], t), 1
+-- The number is the thing you read, so it is sized to fill the tile rather than
+-- inheriting a stock font size. Digit count, not value, decides how big it fits.
+local function TileFontSize(value)
+  local digits = #tostring(value)
+  if digits <= 2 then return 38 elseif digits == 3 then return 32
+  elseif digits == 4 then return 26 elseif digits == 5 then return 21 end
+  return 18
 end
 
-local function GetFontForValue(v)
-  local fLarge, fMid = _G.GameFontNormalLarge or _G.GameFontHighlightLarge or _G.GameFontNormal, _G.GameFontNormal or _G.GameFontHighlight
-  local fSmall = _G.GameFontNormalSmall or _G.GameFontHighlightSmall or fMid
-  if v >= 16384 then return fSmall elseif v >= 1024 then return fMid end
-  return fLarge
+local function TileBaseFont()
+  return _G.GameFontNormalHuge or _G.GameFontHighlightHuge or _G.GameFontNormalLarge or _G.GameFontNormal
 end
 
+-- Tooltip-style inner panel (dark Blizzard backdrop, tinted per theme).
 local function CreatePanel(parent, backgroundKey)
   local panel = CreateFrame("Frame", nil, parent, "BackdropTemplate")
-  panel:SetBackdrop({ bgFile = WHITE_TEXTURE, edgeFile = WHITE_TEXTURE, edgeSize = 1 })
+  panel:SetBackdrop(BACKDROP_TOOLTIP)
   panel.themeBackgroundKey = backgroundKey or "panel"
   ui.themeRefs[#ui.themeRefs + 1] = panel
   return panel
 end
 
-local function CreateThemedButton(parent, text)
-  local button = CreateFrame("Button", nil, parent, "BackdropTemplate")
-  button:SetBackdrop({ bgFile = WHITE_TEXTURE, edgeFile = WHITE_TEXTURE, edgeSize = 1 })
-  button.label = button:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-  button.label:SetPoint("CENTER", 0, 0)
-  button.SetText = function(self, value) self.label:SetText(value) end
+-- Standard red Blizzard button. The template supplies SetText, hover, pressed,
+-- disabled art and the click sound.
+local function CreateWoWButton(parent, text, width, height)
+  local button = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+  button:SetSize(width or 72, height or 22)
   button:SetText(text)
-  button.themeBackgroundKey = "panelAlt"
-  button.isThemedButton = true
-  button:SetScript("OnEnter", function(self)
-    local theme = GetTheme()
-    SetBackdrop(self, theme.accentSoft, theme.accent, 0.72, 0.95)
-    SetTextColor(self.label, theme.text)
-  end)
-  button:SetScript("OnLeave", function(self)
-    local theme = GetTheme()
-    SetBackdrop(self, theme.panelAlt, theme.border)
-    SetTextColor(self.label, theme.text)
-  end)
-  button:SetScript("OnDisable", function(self)
-    local theme = GetTheme()
-    SetBackdrop(self, theme.panel, theme.border, 0.55, 0.38)
-    SetTextColor(self.label, theme.muted, 0.52)
-  end)
-  button:SetScript("OnEnable", function(self)
-    local theme = GetTheme()
-    SetBackdrop(self, theme.panelAlt, theme.border)
-    SetTextColor(self.label, theme.text)
-  end)
-  button:SetScript("OnMouseDown", function(self) if self:IsEnabled() then self.label:ClearAllPoints() self.label:SetPoint("CENTER", 0, -1) end end)
-  button:SetScript("OnMouseUp", function(self) self.label:ClearAllPoints() self.label:SetPoint("CENTER", 0, 0) end)
-  ui.themeRefs[#ui.themeRefs + 1] = button
   return button
 end
 
@@ -340,7 +390,7 @@ local function MaybeHeartbeat(elapsed)
   if state.over or (Fly2048DB and Fly2048DB.mute) then return end
   if #GetEmptyCells() > 2 then state.pressureBeatT = 0 return end
   state.pressureBeatT = (state.pressureBeatT or 0) + elapsed
-  if state.pressureBeatT >= PRESSURE_BEAT_INTERVAL then state.pressureBeatT = 0 PlaySoundFile(PRESSURE_HEARTBEAT_SFX, "SFX") end
+  if state.pressureBeatT >= PRESSURE_BEAT_INTERVAL then state.pressureBeatT = 0 PlayKit("heartbeat") end
 end
 
 local function TriggerBoardGlow(alpha)
@@ -355,7 +405,7 @@ local function CheckMilestone(value)
     if value == mVal then
       state.milestonesHit[value] = true
       TriggerBoardGlow(0.55)
-      if value == 512 then PlaySFX(MILESTONE_SFX_512) elseif value >= 2048 then PlaySFX(MILESTONE_SFX_2048) end
+      if value == 512 then PlayKit("ping") elseif value >= 2048 then PlayKit("warning") end
       if ui.statusText then
         local mute = (Fly2048DB and Fly2048DB.mute) and "Muted" or "Sound on"
         ui.statusText:SetText(("Milestone reached: %d (%s)"):format(value, mute))
@@ -377,14 +427,14 @@ local function DoDivineReset()
   local victim = FindLowestTile()
   if not victim then return end
   state.divineUsed = true
-  PlaySFX(DIVINE_RESET_SFX)
+  PlayKit("click")
   TriggerBoardGlow(0.35)
   local vr, vc = victim.r, victim.c
   DestroyTile(victim)
   if ui.board and vr and vc then
     local f = CreateFrame("Frame", nil, ui.board) f:SetSize(TILE_SIZE, TILE_SIZE)
     local x, y = CellXY(vr, vc) f:SetPoint("TOPLEFT", ui.board, "TOPLEFT", x, y)
-    local t = f:CreateTexture(nil, "OVERLAY") t:SetAllPoints(f) t:SetTexture(TEX_STAR) t:SetBlendMode("ADD") t:SetAlpha(0.0)
+    local t = f:CreateTexture(nil, "OVERLAY") t:SetAllPoints(f) t:SetTexture(TEX.star) t:SetBlendMode("ADD") t:SetAlpha(0.0)
     local ag = t:CreateAnimationGroup()
     local a1 = ag:CreateAnimation("Alpha") a1:SetFromAlpha(0) a1:SetToAlpha(0.85) a1:SetDuration(0.06) a1:SetOrder(1)
     local s1 = ag:CreateAnimation("Scale") s1:SetScaleFrom(0.8, 0.8) s1:SetScaleTo(1.5, 1.5) s1:SetDuration(0.18) s1:SetOrder(1)
@@ -412,51 +462,46 @@ local function ApplyShake(elapsed)
 end
 
 local function SetTileVisual(tile)
-  local r, g, b, a = TileColor(tile.value)
-  tile.bg:SetColorTexture(r, g, b, a)
-  if tile.frame.SetBackdropBorderColor then
-    local lift = tile.value >= 512 and 0.24 or 0.12
-    tile.frame:SetBackdropBorderColor(Clamp(r + lift, 0, 1), Clamp(g + lift, 0, 1), Clamp(b + lift, 0, 1), tile.value >= 512 and 0.95 or 0.62)
-  end
-  local fo = GetFontForValue(tile.value)
+  local loot = GetTileLoot(tile.value)
+  local r, g, b = QualityColor(loot.quality, loot.dim)
+  tile.icon:SetTexture(loot.icon)
+  -- The icon is scenery behind the number, so it is held well below full brightness.
+  local iconTint = loot.dim and 0.42 or 0.52
+  tile.icon:SetVertexColor(iconTint, iconTint, iconTint, 1)
+  if tile.frame.SetBackdropBorderColor then tile.frame:SetBackdropBorderColor(r, g, b, 1) end
+  tile.border:SetVertexColor(r, g, b, 1)
+  tile.border:SetAlpha(loot.quality >= 5 and 0.85 or (loot.quality >= 3 and 0.55 or 0.35))
+  -- An even scrim over the whole icon: no band edge to read as a box.
+  tile.vignette:SetColorTexture(0, 0, 0, 0.30)
+  local fo = TileBaseFont()
   if fo then tile.text:SetFontObject(fo) end
-  local font, size = tile.text:GetFont()
-  if font then tile.text:SetFont(font, size or 18, "OUTLINE") end
+  local font = tile.text:GetFont()
+  if font then tile.text:SetFont(font, TileFontSize(tile.value), "THICKOUTLINE") end
   tile.text:SetText(tostring(tile.value))
-  local luminance = (r * 0.2126) + (g * 0.7152) + (b * 0.0722)
-  if luminance > 0.62 then
-    tile.text:SetTextColor(0.055, 0.070, 0.085, 1)
-    tile.text:SetShadowColor(1, 1, 1, 0.14)
-  else
-    tile.text:SetTextColor(0.965, 0.980, 1.000, 1)
-    tile.text:SetShadowColor(0, 0, 0, 0.52)
-  end
-  tile.text:SetShadowOffset(1.2, -1.2)
-  tile.border:SetAlpha(tile.value >= 2048 and 0.38 or (tile.value >= 512 and 0.18 or 0))
+  tile.text:SetTextColor(1, 1, 1, 1)
+  tile.text:SetShadowColor(0, 0, 0, 1)
+  tile.text:SetShadowOffset(2, -2)
 end
 
 local function ApplyTheme()
   local theme = GetTheme()
-  if ui.frame then SetBackdrop(ui.frame, theme.frame, theme.border) end
+  if ui.frame then SetBackdrop(ui.frame, theme.frameBg, theme.frameEdge) end
   for _, ref in ipairs(ui.themeRefs) do
     if ref and ref.SetBackdropColor then
       local bg = theme[ref.themeBackgroundKey or "panel"] or theme.panel
       SetBackdrop(ref, bg, theme.border)
-      if ref.isThemedButton and ref.label then SetTextColor(ref.label, theme.text) end
     end
   end
-  for _, cell in ipairs(ui.cells) do SetTextureColor(cell, theme.cell) end
+  for _, cell in ipairs(ui.cells) do cell:SetVertexColor(theme.cell[1], theme.cell[2], theme.cell[3], theme.cell[4] or 1) end
   if ui.board then SetBackdrop(ui.board, theme.board, theme.border) end
-  if ui.titleText then SetTextColor(ui.titleText, theme.text) end
-  if ui.subtitleText then ui.subtitleText:SetText(theme.name:upper() .. " FLIGHT EDITION") SetTextColor(ui.subtitleText, theme.accent) end
+  if ui.crest then ui.crest:SetTexture(theme.crest) ui.crest:SetAlpha(0.14) end
+  if ui.subtitleText then ui.subtitleText:SetText(theme.subtitle) SetTextColor(ui.subtitleText, theme.accent) end
   if ui.statusText then SetTextColor(ui.statusText, theme.muted) end
-  if ui.rightTitle then SetTextColor(ui.rightTitle, theme.text) end
+  if ui.rightTitle then SetTextColor(ui.rightTitle, theme.gold) end
   if ui.guildLabel then SetTextColor(ui.guildLabel, theme.muted) end
   if ui.comboText then SetTextColor(ui.comboText, theme.accent) end
-  if ui.gameOverTitle then SetTextColor(ui.gameOverTitle, theme.text) end
-  if ui.gameOverScore then SetTextColor(ui.gameOverScore, theme.gold) end
-  if ui.headerLine then SetTextureColor(ui.headerLine, theme.accentSoft) end
-  if ui.separator then SetTextureColor(ui.separator, theme.border, 0.70) end
+  if ui.gameOverTitle then SetTextColor(ui.gameOverTitle, theme.gold) end
+  if ui.gameOverScore then SetTextColor(ui.gameOverScore, theme.text) end
   for _, card in ipairs(ui.statCards) do
     SetBackdrop(card, theme.panelAlt, theme.border)
     if card.caption then SetTextColor(card.caption, theme.muted) end
@@ -487,21 +532,22 @@ local function CreateTile(r, c, value, isSpawn)
   local id = state.nextId
   state.nextId = state.nextId + 1
   local f = CreateFrame("Frame", nil, ui.board, "BackdropTemplate") f:SetSize(TILE_SIZE, TILE_SIZE)
-  f:SetBackdrop({ edgeFile = WHITE_TEXTURE, edgeSize = 1 })
-  local shadow = f:CreateTexture(nil, "BACKGROUND") shadow:SetPoint("TOPLEFT", f, "TOPLEFT", 3, -3) shadow:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", 3, -3) shadow:SetColorTexture(0, 0, 0, 0.24)
-  local bg = f:CreateTexture(nil, "BACKGROUND") bg:SetAllPoints(f)
-  local gloss = f:CreateTexture(nil, "ARTWORK") gloss:SetTexture(WHITE_TEXTURE) gloss:SetPoint("TOPLEFT", f, "TOPLEFT", 2, -2) gloss:SetPoint("TOPRIGHT", f, "TOPRIGHT", -2, -2) gloss:SetHeight(TILE_SIZE * 0.42) gloss:SetColorTexture(1, 1, 1, 0.035)
-  local border = f:CreateTexture(nil, "OVERLAY") border:SetTexture(TEX_BORDER_GLOW) border:SetBlendMode("ADD") border:SetPoint("CENTER", f, "CENTER", 0, 0) border:SetSize(TILE_SIZE * 1.6, TILE_SIZE * 1.6) border:SetAlpha(0.22)
+  f:SetBackdrop({ edgeFile = WHITE_TEXTURE, edgeSize = 2 })
+  -- Item-slot stack: dark base, loot icon, vignette band for the number, quality glow.
+  local base = f:CreateTexture(nil, "BACKGROUND") base:SetPoint("TOPLEFT", f, "TOPLEFT", 1, -1) base:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -1, 1) base:SetColorTexture(0.04, 0.04, 0.05, 1)
+  local icon = f:CreateTexture(nil, "ARTWORK", nil, 0) icon:SetPoint("TOPLEFT", f, "TOPLEFT", 3, -3) icon:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -3, 3) icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+  local vignette = f:CreateTexture(nil, "ARTWORK", nil, 1) vignette:SetTexture(WHITE_TEXTURE) vignette:SetPoint("TOPLEFT", f, "TOPLEFT", 3, -3) vignette:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -3, 3)
+  local border = f:CreateTexture(nil, "OVERLAY") border:SetTexture(TEX.glow) border:SetBlendMode("ADD") border:SetPoint("CENTER", f, "CENTER", 0, 0) border:SetSize(TILE_SIZE * 1.6, TILE_SIZE * 1.6) border:SetAlpha(0.35)
   local flash = f:CreateTexture(nil, "OVERLAY") flash:SetAllPoints(f) flash:SetColorTexture(1, 1, 1, 0)
-  local spark = f:CreateTexture(nil, "OVERLAY") spark:SetTexture(TEX_STAR) spark:SetBlendMode("ADD") spark:SetPoint("CENTER", f, "CENTER", 0, 0) spark:SetSize(TILE_SIZE * 1.1, TILE_SIZE * 1.1) spark:SetAlpha(0) spark:Hide()
+  local spark = f:CreateTexture(nil, "OVERLAY") spark:SetTexture(TEX.star) spark:SetBlendMode("ADD") spark:SetPoint("CENTER", f, "CENTER", 0, 0) spark:SetSize(TILE_SIZE * 1.1, TILE_SIZE * 1.1) spark:SetAlpha(0) spark:Hide()
   local sparkAG = spark:CreateAnimationGroup()
   local a1 = sparkAG:CreateAnimation("Alpha") a1:SetFromAlpha(0) a1:SetToAlpha(0.85) a1:SetDuration(0.06) a1:SetOrder(1)
   local s1 = sparkAG:CreateAnimation("Scale") s1:SetScaleFrom(0.6, 0.6) s1:SetScaleTo(1.3, 1.3) s1:SetDuration(0.10) s1:SetOrder(1)
   local a2 = sparkAG:CreateAnimation("Alpha") a2:SetFromAlpha(0.85) a2:SetToAlpha(0) a2:SetDuration(0.12) a2:SetOrder(2)
   sparkAG:SetScript("OnFinished", function() spark:Hide() spark:SetAlpha(0) spark:SetScale(1) end)
-  local txt = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge") txt:SetPoint("CENTER", f, "CENTER", 0, 0)
+  local txt = f:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge") txt:SetPoint("CENTER", f, "CENTER", 0, 0)
 
-  local tile = { id = id, frame = f, bg = bg, shadow = shadow, gloss = gloss, border = border, flash = flash, flashA = 0, spark = spark, sparkAG = sparkAG, text = txt, r = r, c = c, value = value, sx = 0, sy = 0, ex = 0, ey = 0, tr = r, tc = c, mergeInto = nil, mergedThisTurn = false, pop = false, spawnPop = false }
+  local tile = { id = id, frame = f, base = base, icon = icon, vignette = vignette, border = border, flash = flash, flashA = 0, spark = spark, sparkAG = sparkAG, text = txt, r = r, c = c, value = value, sx = 0, sy = 0, ex = 0, ey = 0, tr = r, tc = c, mergeInto = nil, mergedThisTurn = false, pop = false, spawnPop = false }
   SetTileVisual(tile)
   PlaceTileFrame(tile, r, c)
   state.tiles[id], state.grid[r][c] = tile, tile
@@ -548,12 +594,18 @@ local function BroadcastScore()
   if not (IsInGuild and IsInGuild()) then return end
   if GuildSyncRestricted() then return end
   if not state.best or state.best <= 0 then return end
-  local msg = "SCORE:" .. state.best
-  if C_ChatInfo and C_ChatInfo.SendAddonMessage then
-    C_ChatInfo.SendAddonMessage(MSG_PREFIX, msg, "GUILD")
-  elseif SendAddonMessage then
-    SendAddonMessage(MSG_PREFIX, msg, "GUILD")
+  local function send(msg)
+    if C_ChatInfo and C_ChatInfo.SendAddonMessage then
+      C_ChatInfo.SendAddonMessage(MSG_PREFIX, msg, "GUILD")
+    elseif SendAddonMessage then
+      SendAddonMessage(MSG_PREFIX, msg, "GUILD")
+    end
   end
+  -- Legacy form first so older Fly2048 clients still parse the score, then the
+  -- class-tagged form used for class colours on the flightboard.
+  send("SCORE:" .. state.best)
+  local classFile = LocalClassFile()
+  if classFile then send("SCORE:" .. state.best .. ":" .. classFile) end
 end
 
 local function BroadcastRequest()
@@ -594,14 +646,22 @@ local function HandleAddonMessage(prefix, msg, channel, senderFull)
     sender = sender .. "-" .. realm
   end
   if sender == GetLocalKey() then return end
-  local score = tonumber(msg:match("^SCORE:(%d+)$"))
+  local scoreStr, classFile = msg:match("^SCORE:(%d+):?(%u*)$")
+  local score = tonumber(scoreStr)
   if score then
     Fly2048DB.guildScores = Fly2048DB.guildScores or {}
+    Fly2048DB.guildClasses = Fly2048DB.guildClasses or {}
+    local changed = false
+    if classFile and classFile ~= "" and Fly2048DB.guildClasses[sender] ~= classFile then
+      Fly2048DB.guildClasses[sender] = classFile
+      changed = true
+    end
     local existing = Fly2048DB.guildScores[sender] or 0
     if score > existing then
       Fly2048DB.guildScores[sender] = score
-      RefreshLeaderboard()
+      changed = true
     end
+    if changed then RefreshLeaderboard() end
   elseif msg == "REQUEST" then
     After(math.random() * GUILD_JITTER_MAX, BroadcastScore)
   end
@@ -611,14 +671,15 @@ local function BuildSortedGuild()
   local list = {}
   local localKey = GetLocalKey()
   Fly2048DB.guildScores = Fly2048DB.guildScores or {}
+  local classes = Fly2048DB.guildClasses or {}
   for k, v in pairs(Fly2048DB.guildScores) do
     if k ~= localKey then
-      list[#list + 1] = { name = k, score = v, isLocal = false }
+      list[#list + 1] = { name = k, score = v, isLocal = false, class = classes[k] }
     end
   end
   local displayScore = math.max(state.best or 0, state.score or 0)
   if displayScore > 0 then
-    list[#list + 1] = { name = localKey, score = displayScore, isLocal = true }
+    list[#list + 1] = { name = localKey, score = displayScore, isLocal = true, class = LocalClassFile() }
   end
   table.sort(list, function(a, b)
     if a.score ~= b.score then return a.score > b.score end
@@ -664,7 +725,8 @@ RefreshLeaderboard = function()
     if i <= n then
       local entry = sorted[i]
       local displayName = entry.name:match("^([^%-]+)") or entry.name
-      row.rankText:SetText(tostring(i))
+      if i == 1 then row.rankText:SetText("") if row.crown then row.crown:Show() end
+      else row.rankText:SetText(tostring(i)) if row.crown then row.crown:Hide() end end
       row.nameText:SetText(displayName)
       row.scoreText:SetText(FormatNumber(entry.score))
       if row.lastName == entry.name and row.lastScore and entry.score > row.lastScore then row.pulseA = 0.62 end
@@ -675,7 +737,7 @@ RefreshLeaderboard = function()
         SetTextColor(row.scoreText, theme.gold)
       else
         SetTextColor(row.rankText, theme.muted)
-        SetTextColor(row.nameText, theme.text, 0.90)
+        SetTextColor(row.nameText, ClassColor(entry.class) or theme.text, 0.95)
         SetTextColor(row.scoreText, theme.text, 0.90)
       end
       local targetY = GetRowTargetY(i)
@@ -746,7 +808,7 @@ end
 local UpdateUI
 
 local function CycleTheme()
-  local current = Fly2048DB.theme or "arcane"
+  local current = THEMES[Fly2048DB.theme] and Fly2048DB.theme or DefaultThemeKey()
   local nextIndex = 1
   for i, key in ipairs(THEME_ORDER) do if key == current then nextIndex = (i % #THEME_ORDER) + 1 break end end
   Fly2048DB.theme = THEME_ORDER[nextIndex]
@@ -774,20 +836,13 @@ end
 local function AddTooltip(frame, title, body)
   frame:SetScript("OnEnter", function(self)
     local theme = GetTheme()
-    if self.isThemedButton then SetBackdrop(self, theme.accentSoft, theme.accent, 0.72, 0.95) end
     if not GameTooltip then return end
     GameTooltip:SetOwner(self, "ANCHOR_TOP")
-    GameTooltip:SetText(title, theme.accent[1], theme.accent[2], theme.accent[3])
+    GameTooltip:SetText(title, theme.gold[1], theme.gold[2], theme.gold[3])
     if body then GameTooltip:AddLine(body, theme.text[1], theme.text[2], theme.text[3], true) end
     GameTooltip:Show()
   end)
-  frame:SetScript("OnLeave", function(self)
-    local theme = GetTheme()
-    if self.isThemedButton then
-      if self.IsEnabled and self:IsEnabled() then SetBackdrop(self, theme.panelAlt, theme.border) else SetBackdrop(self, theme.panel, theme.border, 0.55, 0.38) end
-    end
-    if GameTooltip then GameTooltip:Hide() end
-  end)
+  frame:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
 end
 
 -- ==============================
@@ -944,7 +999,7 @@ local function CommitMove()
     state.combo = 0
   end
   SpawnRandomTile() ApplyPressureVisuals()
-  if not HasMoves() then state.over = true if state.newBestThisRun then PlaySFX(LEVELUP_SFX) else PlaySFX(GAMEOVER_SFX) end end
+  if not HasMoves() then state.over = true if state.newBestThisRun then PlayKit("levelUp") else PlayKit("gameOver") end end
   UpdateUI() state.inputLocked = false
 end
 
@@ -965,7 +1020,8 @@ local function BuildUI()
   end
   f:SetScale(Fly2048DB.uiScale or 1)
   f:SetMovable(true) f:EnableMouse(true) f:RegisterForDrag("LeftButton") f:SetClampedToScreen(true)
-  f:SetBackdrop({ bgFile = WHITE_TEXTURE, edgeFile = WHITE_TEXTURE, edgeSize = 1 })
+  f:SetBackdrop(BACKDROP_DIALOG)
+  if UISpecialFrames then table.insert(UISpecialFrames, "Fly2048Frame") end
   f:SetScript("OnDragStart", function(self) self:StartMoving() end)
   f:SetScript("OnDragStop", function(self)
     self:StopMovingOrSizing()
@@ -974,41 +1030,47 @@ local function BuildUI()
   end)
   f:EnableKeyboard(true) f:SetPropagateKeyboardInput(false)
 
-  ui.titleText = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-  ui.titleText:SetPoint("TOPLEFT", FRAME_PAD, -FRAME_PAD)
+  -- Header plate with the title, Blizzard dialog style.
+  ui.headerTex = f:CreateTexture(nil, "ARTWORK")
+  ui.headerTex:SetTexture(TEX.header) ui.headerTex:SetSize(256, 64) ui.headerTex:SetPoint("TOP", f, "TOP", 0, 12)
+  ui.titleText = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  ui.titleText:SetPoint("TOP", ui.headerTex, "TOP", 0, -14)
   ui.titleText:SetText("Fly2048")
+  ui.emblem = f:CreateTexture(nil, "ARTWORK")
+  ui.emblem:SetTexture(TEX.dice) ui.emblem:SetTexCoord(0.07, 0.93, 0.07, 0.93) ui.emblem:SetSize(26, 26)
+  ui.emblem:SetPoint("TOPLEFT", f, "TOPLEFT", FRAME_PAD - 4, -(FRAME_PAD - 6))
   ui.subtitleText = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-  ui.subtitleText:SetPoint("TOPLEFT", ui.titleText, "BOTTOMLEFT", 0, -2)
-  ui.subtitleText:SetText("ARCANE FLIGHT EDITION")
+  ui.subtitleText:SetPoint("LEFT", ui.emblem, "RIGHT", 6, 0)
+  ui.subtitleText:SetText("FOR THE ALLIANCE!")
   ui.statusText = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-  ui.statusText:SetPoint("TOPLEFT", f, "TOPLEFT", FRAME_PAD, -(FRAME_PAD + 48))
+  ui.statusText:SetPoint("TOPLEFT", f, "TOPLEFT", FRAME_PAD, -(FRAME_PAD + HEADER_H - 20))
 
-  ui.themeBtn = CreateThemedButton(f, "Arcane")
-  ui.themeBtn:SetSize(66, 24) ui.themeBtn:SetPoint("TOPLEFT", f, "TOPLEFT", 166, -18)
-  ui.themeBtn:SetScript("OnClick", CycleTheme)
-  AddTooltip(ui.themeBtn, "Colour theme", "Switch between the Arcane and Ember palettes.")
-  ui.motionBtn = CreateThemedButton(f, "Motion")
-  ui.motionBtn:SetSize(66, 24) ui.motionBtn:SetPoint("LEFT", ui.themeBtn, "RIGHT", 5, 0)
-  ui.motionBtn:SetScript("OnClick", ToggleMotion)
-  AddTooltip(ui.motionBtn, "Motion", "Toggle full and reduced animation modes.")
-  ui.soundBtn = CreateThemedButton(f, "Sound on")
-  ui.soundBtn:SetSize(66, 24) ui.soundBtn:SetPoint("LEFT", ui.motionBtn, "RIGHT", 5, 0)
+  ui.soundBtn = CreateWoWButton(f, "Sound on", 72, 22)
+  ui.soundBtn:SetPoint("TOPRIGHT", f, "TOPLEFT", FRAME_PAD + BOARD_INNER_W, -(FRAME_PAD + 34))
   ui.soundBtn:SetScript("OnClick", ToggleSound)
   AddTooltip(ui.soundBtn, "Sound", "Mute or enable Fly2048 sound effects.")
+  ui.motionBtn = CreateWoWButton(f, "Motion", 72, 22)
+  ui.motionBtn:SetPoint("RIGHT", ui.soundBtn, "LEFT", -4, 0)
+  ui.motionBtn:SetScript("OnClick", ToggleMotion)
+  AddTooltip(ui.motionBtn, "Motion", "Toggle full and reduced animation modes.")
+  ui.themeBtn = CreateWoWButton(f, "Alliance", 72, 22)
+  ui.themeBtn:SetPoint("RIGHT", ui.motionBtn, "LEFT", -4, 0)
+  ui.themeBtn:SetScript("OnClick", CycleTheme)
+  AddTooltip(ui.themeBtn, "Faction colours", "Switch between Alliance and Horde colours.")
 
   ui.comboText = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-  ui.comboText:SetPoint("TOPRIGHT", f, "TOPLEFT", FRAME_PAD + BOARD_INNER_W, -(FRAME_PAD + 51))
+  ui.comboText:SetPoint("TOPRIGHT", f, "TOPLEFT", FRAME_PAD + BOARD_INNER_W, -(FRAME_PAD + HEADER_H - 20))
   ui.comboText:Hide()
-  ui.headerLine = f:CreateTexture(nil, "ARTWORK")
-  ui.headerLine:SetHeight(1) ui.headerLine:SetPoint("TOPLEFT", f, "TOPLEFT", FRAME_PAD, -(FRAME_PAD + HEADER_H - 6)) ui.headerLine:SetPoint("TOPRIGHT", f, "TOPLEFT", FRAME_PAD + BOARD_INNER_W, -(FRAME_PAD + HEADER_H - 6))
-  CreateFrame("Button", nil, f, "UIPanelCloseButton"):SetPoint("TOPRIGHT", -3, -3)
+  CreateFrame("Button", nil, f, "UIPanelCloseButton"):SetPoint("TOPRIGHT", -4, -4)
 
-  ui.separator = f:CreateTexture(nil, "BACKGROUND")
-  ui.separator:SetWidth(1) ui.separator:SetPoint("TOPLEFT", f, "TOPLEFT", LBOARD_X - LBOARD_GAP/2, -FRAME_PAD) ui.separator:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", LBOARD_X - LBOARD_GAP/2, FRAME_PAD)
+  ui.seaBtn = CreateFrame("Button", nil, f)
+  ui.seaBtn:SetSize(10, 10) ui.seaBtn:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 13, 13)
+  ui.seaBtn.tex = ui.seaBtn:CreateTexture(nil, "OVERLAY") ui.seaBtn.tex:SetAllPoints() ui.seaBtn.tex:SetColorTexture(1, 1, 1, 0.05)
+  ui.seaBtn:SetScript("OnClick", function() Fly2048DB.lostAtSea = true PlaySeaSong() end)
 
   ui.rightTitle = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-  ui.rightTitle:SetPoint("TOPLEFT", f, "TOPLEFT", LBOARD_X, -FRAME_PAD)
-  ui.rightTitle:SetText("Flightboard")
+  ui.rightTitle:SetPoint("TOPLEFT", f, "TOPLEFT", LBOARD_X, -(FRAME_PAD + 2))
+  ui.rightTitle:SetText("Guild Flightboard")
 
   local function CreateStatCard(caption, isBest)
     local card = CreatePanel(f, "panelAlt")
@@ -1027,17 +1089,24 @@ local function BuildUI()
   bestCard:SetPoint("LEFT", scoreCard, "RIGHT", 6, 0)
   ui.scoreText, ui.bestText = scoreCard.value, bestCard.value
 
-  ui.resetBtn = CreateThemedButton(f, "Divine Reset")
-  ui.resetBtn:SetSize(GUILD_PANEL_W, 26) ui.resetBtn:SetPoint("TOPLEFT", f, "TOPLEFT", LBOARD_X, -(FRAME_PAD + 84))
+  ui.resetBtn = CreateWoWButton(f, "Divine Reset", GUILD_PANEL_W, 22)
+  ui.resetBtn:SetPoint("TOPLEFT", f, "TOPLEFT", LBOARD_X, -(FRAME_PAD + 86))
   ui.resetBtn:SetScript("OnClick", function() DoDivineReset() UpdateUI() end)
   AddTooltip(ui.resetBtn, "Divine Reset", "Once per game, remove the lowest-value tile.")
 
+  -- Leaderboard panel with the faction crest as a watermark.
+  ui.lboardPanel = CreatePanel(f, "panel")
+  ui.lboardPanel:SetPoint("TOPLEFT", f, "TOPLEFT", LBOARD_X, -(FRAME_PAD + 118))
+  ui.lboardPanel:SetPoint("BOTTOMRIGHT", f, "BOTTOMLEFT", LBOARD_X + GUILD_PANEL_W, FRAME_PAD + 30)
+  ui.lboardPanel:SetFrameLevel(f:GetFrameLevel() + 1)
+  ui.crest = ui.lboardPanel:CreateTexture(nil, "BACKGROUND", nil, 1)
+  ui.crest:SetSize(176, 176) ui.crest:SetPoint("CENTER", ui.lboardPanel, "CENTER", 0, -8)
+
   ui.guildLabel = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-  ui.guildLabel:SetPoint("TOPLEFT", f, "TOPLEFT", LBOARD_X, -(FRAME_PAD + 122))
+  ui.guildLabel:SetPoint("TOPLEFT", f, "TOPLEFT", LBOARD_X + 8, -(FRAME_PAD + 126))
   ui.guildLabel:SetText("GUILD RANKING")
 
-  ui.pingBtn = CreateThemedButton(f, "Refresh guild scores")
-  ui.pingBtn:SetSize(GUILD_PANEL_W, 26)
+  ui.pingBtn = CreateWoWButton(f, "Refresh guild scores", GUILD_PANEL_W, 22)
   ui.pingBtn:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", LBOARD_X, FRAME_PAD)
   ui.pingBtn:SetScript("OnClick", function() if state.guildPingCooldown <= 0 then AutoPing() end end)
   AddTooltip(ui.pingBtn, "Guild scores", "Ask online guild members running Fly2048 for their best score.")
@@ -1046,22 +1115,25 @@ local function BuildUI()
   for i = 1, GUILD_MAX_ROWS do
     local row = CreateFrame("Frame", nil, f)
     row.index, row.pulseA = i, 0
-    row:SetSize(GUILD_PANEL_W, GUILD_ROW_H)
+    row:SetSize(GUILD_PANEL_W - 12, GUILD_ROW_H)
+    row:SetFrameLevel(ui.lboardPanel:GetFrameLevel() + 2)
     local ty = GetRowTargetY(i)
-    row:SetPoint("TOPLEFT", f, "TOPLEFT", LBOARD_X, ty)
+    row:SetPoint("TOPLEFT", f, "TOPLEFT", LBOARD_X + 6, ty)
     row.fromY, row.targetY, row.sliding, row.slideT = ty, ty, false, 0
     row.background = row:CreateTexture(nil, "BACKGROUND") row.background:SetAllPoints()
     row.highlight = row:CreateTexture(nil, "ARTWORK") row.highlight:SetAllPoints() row.highlight:SetBlendMode("ADD")
+    row.crown = row:CreateTexture(nil, "OVERLAY") row.crown:SetTexture(TEX.crown) row.crown:SetSize(16, 16) row.crown:SetPoint("LEFT", 5, 0) row.crown:Hide()
     row.rankText = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     row.rankText:SetPoint("LEFT", 6, 0) row.rankText:SetWidth(20) row.rankText:SetJustifyH("LEFT")
     row.nameText = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    row.nameText:SetPoint("LEFT", row.rankText, "RIGHT", 3, 0) row.nameText:SetWidth(118) row.nameText:SetJustifyH("LEFT")
+    row.nameText:SetPoint("LEFT", row.rankText, "RIGHT", 3, 0) row.nameText:SetWidth(110) row.nameText:SetJustifyH("LEFT")
     row.scoreText = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     row.scoreText:SetPoint("RIGHT", row, "RIGHT", -6, 0) row.scoreText:SetWidth(62) row.scoreText:SetJustifyH("RIGHT")
     row:Hide()
     ui.guildRows[i] = row
   end
 
+  -- The board is a 4x4 bag: each cell is an empty item slot.
   ui.boardWrap = CreateFrame("Frame", nil, f)
   ui.boardWrap:SetPoint("TOPLEFT", FRAME_PAD, -(FRAME_PAD + HEADER_H))
   ui.boardWrap:SetSize(BOARD_INNER_W, BOARD_INNER_W)
@@ -1076,8 +1148,9 @@ local function BuildUI()
       local cell = CreateFrame("Frame", nil, ui.board)
       cell:SetSize(TILE_SIZE, TILE_SIZE)
       local x, y = CellXY(r, c) cell:SetPoint("TOPLEFT", x, y)
-      local texture = cell:CreateTexture(nil, "BACKGROUND") texture:SetAllPoints()
-      ui.cells[#ui.cells + 1] = texture
+      local slot = cell:CreateTexture(nil, "BACKGROUND")
+      slot:SetTexture(TEX.slot) slot:SetSize(TILE_SIZE * SLOT_SCALE, TILE_SIZE * SLOT_SCALE) slot:SetPoint("CENTER", cell, "CENTER", 0, 0)
+      ui.cells[#ui.cells + 1] = slot
     end
   end
 
@@ -1085,13 +1158,13 @@ local function BuildUI()
   ui.gameOverOverlay:SetAllPoints() ui.gameOverOverlay:SetFrameStrata("DIALOG") ui.gameOverOverlay:SetFrameLevel(ui.board:GetFrameLevel() + 10) ui.gameOverOverlay:Hide()
   ui.gameOverDim = ui.gameOverOverlay:CreateTexture(nil, "BACKGROUND") ui.gameOverDim:SetAllPoints() ui.gameOverDim:SetColorTexture(0.01, 0.015, 0.02, 0.88)
   local panel = CreatePanel(ui.gameOverOverlay, "panel") panel:SetPoint("CENTER") panel:SetSize(286, 224)
-  local hdr = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge") hdr:SetPoint("TOP", 0, -18) hdr:SetText("Flight ended")
+  local hdr = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge") hdr:SetPoint("TOP", 0, -18) hdr:SetText("Flight Ended")
   local scoreLine = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight") scoreLine:SetPoint("TOP", hdr, "BOTTOM", 0, -12)
   ui.gameOverTitle, ui.gameOverScore = hdr, scoreLine
   ui.gameOverOverlay:SetScript("OnShow", function() scoreLine:SetText("Final score  " .. FormatNumber(state.score or 0)) end)
-  ui.playAgainBtn = CreateThemedButton(panel, "Play again") ui.playAgainBtn:SetSize(224, 28) ui.playAgainBtn:SetPoint("BOTTOM", 0, 88) ui.playAgainBtn:SetScript("OnClick", ResetGame)
-  ui.announceBtn = CreateThemedButton(panel, "Brag to Guild") ui.announceBtn:SetSize(224, 28) ui.announceBtn:SetPoint("BOTTOM", 0, 54) ui.announceBtn:SetScript("OnClick", AnnounceScoreToGuild)
-  ui.curseBtn = CreateThemedButton(panel, "CurseForge link") ui.curseBtn:SetSize(224, 28) ui.curseBtn:SetPoint("BOTTOM", 0, 20) ui.curseBtn:SetScript("OnClick", PutCurseLinkInChat)
+  ui.playAgainBtn = CreateWoWButton(panel, "Play again", 224, 24) ui.playAgainBtn:SetPoint("BOTTOM", 0, 88) ui.playAgainBtn:SetScript("OnClick", ResetGame)
+  ui.announceBtn = CreateWoWButton(panel, "Brag to Guild", 224, 24) ui.announceBtn:SetPoint("BOTTOM", 0, 54) ui.announceBtn:SetScript("OnClick", AnnounceScoreToGuild)
+  ui.curseBtn = CreateWoWButton(panel, "CurseForge link", 224, 24) ui.curseBtn:SetPoint("BOTTOM", 0, 20) ui.curseBtn:SetScript("OnClick", PutCurseLinkInChat)
 
   f:SetScript("OnKeyDown", function(self, key)
     if ChatEdit_GetActiveWindow and ChatEdit_GetActiveWindow() and ChatEdit_GetActiveWindow():IsShown() then return end
@@ -1100,7 +1173,10 @@ local function BuildUI()
     if state.inputLocked or ui.anim.active then state.queuedDir = dir return end
     ApplyMovePlan(dir)
   end)
-  f:SetScript("OnShow", function() f:SetFrameStrata("DIALOG") f:SetFrameLevel(100) ApplyPressureVisuals() UpdateUI() end)
+  f:SetScript("OnShow", function()
+    f:SetFrameStrata("DIALOG") f:SetFrameLevel(100) ApplyPressureVisuals() UpdateUI()
+    if Fly2048DB.lostAtSea and not state.seaSongPlayed then PlaySeaSong() end
+  end)
   f:SetScript("OnUpdate", function(_, elapsed)
     ApplyShake(elapsed) MaybeHeartbeat(elapsed)
     if state.scoreRollup.active then
@@ -1179,7 +1255,7 @@ end
 
 local function PrintHelp()
   PrintMessage("/fly2048 - show or hide")
-  PrintMessage("reset | mute | auto | theme [arcane/ember] | motion [full/reduced]")
+  PrintMessage("reset | mute | auto | theme [alliance/horde] | motion [full/reduced]")
   PrintMessage("scale [0.75-1.25] | center | demo | test | testclear")
 end
 
@@ -1215,6 +1291,10 @@ SlashCmdList["FLY2048"] = function(msg)
     PrintMessage("Visual demo loaded. Use /fly2048 reset to return to a normal game.")
     return
   elseif command == "help" then PrintHelp() return
+  elseif command == "lostatsea" then  -- undocumented: turn the corner-button tune off or on again
+    Fly2048DB.lostAtSea = not Fly2048DB.lostAtSea
+    PrintMessage(Fly2048DB.lostAtSea and "Aye." or "Nay.")
+    return
   elseif command == "test" then
     BuildUI()
     local realm = (GetRealmName and GetRealmName()) or "Test"
@@ -1244,7 +1324,7 @@ function Fly2048_OnAddonCompartmentEnter(_, menuButton)
   if not GameTooltip or not menuButton then return end
   GameTooltip:SetOwner(menuButton, "ANCHOR_LEFT")
   GameTooltip:SetText("Fly2048")
-  GameTooltip:AddLine("Left-click to play. Right-click to change theme.", 1, 1, 1, true)
+  GameTooltip:AddLine("Left-click to play. Right-click to switch faction colours.", 1, 1, 1, true)
   GameTooltip:Show()
 end
 
@@ -1258,10 +1338,13 @@ boot:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4)
   if event == "ADDON_LOADED" and arg1 == ADDON_NAME then
     Fly2048DB.best, Fly2048DB.mute, Fly2048DB.autopopup = tonumber(Fly2048DB.best) or 0, (Fly2048DB.mute == true), (Fly2048DB.autopopup ~= false)
     Fly2048DB.guildScores = Fly2048DB.guildScores or {}
-    if not THEMES[Fly2048DB.theme] then Fly2048DB.theme = "arcane" end
+    Fly2048DB.guildClasses = Fly2048DB.guildClasses or {}
+    -- Old "arcane"/"ember" (or missing) themes become the player's faction. Only
+    -- store a key once the faction is known; GetTheme() copes with nil meanwhile.
+    if not THEMES[Fly2048DB.theme] then Fly2048DB.theme = PlayerFaction() and DefaultThemeKey() or nil end
     if Fly2048DB.motion ~= "reduced" then Fly2048DB.motion = "full" end
     Fly2048DB.uiScale = Clamp(tonumber(Fly2048DB.uiScale) or 1, 0.75, 1.25)
-    Fly2048DB.schemaVersion = 2
+    Fly2048DB.schemaVersion = 3
     state.best = Fly2048DB.best
     if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then
       C_ChatInfo.RegisterAddonMessagePrefix(MSG_PREFIX)
@@ -1283,6 +1366,10 @@ boot:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4)
   if event == "CHAT_MSG_ADDON" then
     HandleAddonMessage(arg1, arg2, arg3, arg4)
     return
+  end
+  if event == "PLAYER_ENTERING_WORLD" and Fly2048DB and not THEMES[Fly2048DB.theme] and PlayerFaction() then
+    -- Faction was unknown at ADDON_LOADED; settle the default now.
+    Fly2048DB.theme = DefaultThemeKey() ApplyTheme() UpdateUI()
   end
   if not Fly2048DB or Fly2048DB.autopopup ~= true then return end
   if event == "PLAYER_CONTROL_LOST" then After(0.20, function() if UnitOnTaxi and UnitOnTaxi("player") then if not ui.frame:IsShown() then if not next(state.tiles) then ResetGame() end ui.frame:Show() end state.autoShown = true end end)

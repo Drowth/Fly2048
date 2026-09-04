@@ -9,18 +9,19 @@ Fly2048 is a lightweight 2048 mini-game for World of Warcraft, designed for taxi
 
 Both clients use the same guarded Lua implementation and SavedVariables schema so fixes do not drift between editions.
 
-## Beta visual refresh
+## Warcraft loot interface
 
-Version `1.1.0-beta.1` introduces the Arcane Flight interface:
+Version `1.2.0-beta.1` rebuilds the look with Blizzard's own art:
 
-- Curated Arcane and Ember colour palettes
-- Adaptive tile text contrast and milestone styling
-- Cleaner score cards and guild flightboard
-- Merge-chain feedback and animated score gains
-- Subtle board-pressure and leaderboard update effects
-- Full and reduced-motion modes
-- Saved window position and UI scale
-- Retail AddOn Compartment support
+- Dialog-box frame, header plate, tooltip-style panels and standard red buttons
+- The board is a 4x4 bag of item slots; tiles are loot icons with item-quality borders, from Poor copper up to Heirloom dragon heads
+- Alliance and Horde themes, defaulting to your faction, with the faction crest behind the guild flightboard
+- Leader crown for rank 1 and class-coloured guild names on the flightboard
+- Merge-chain feedback, animated score gains, board-pressure and leaderboard effects
+- Full and reduced-motion modes, saved window position and UI scale
+- Esc closes the window; Retail AddOn Compartment support
+
+Saved `arcane` or `ember` themes from earlier betas migrate to your faction's theme on first load.
 
 This work is isolated on the `feature/dynamic-ui-retail` branch until it has completed in-game testing.
 
@@ -46,8 +47,8 @@ The resulting path must end in `Interface/AddOns/Fly2048/Fly2048.lua`. Fully res
 - `/fly2048 reset` — start a new game
 - `/fly2048 mute` — toggle sound
 - `/fly2048 auto` — toggle automatic taxi-flight display
-- `/fly2048 theme` — cycle the colour theme
-- `/fly2048 theme arcane|ember` — select a theme directly
+- `/fly2048 theme` — switch between Alliance and Horde colours
+- `/fly2048 theme alliance|horde` — select a faction theme directly
 - `/fly2048 motion full|reduced` — set animation intensity
 - `/fly2048 scale 0.75-1.25` — resize the interface
 - `/fly2048 center` — return the window to screen centre
@@ -55,7 +56,7 @@ The resulting path must end in `Interface/AddOns/Fly2048/Fly2048.lua`. Fully res
 - `/fly2048 test` and `/fly2048 testclear` — add or remove guild leaderboard test data
 - `/fly2048 help` — show the command summary
 
-On Retail, Fly2048 also appears in the AddOn Compartment. Left-click it to play or right-click it to change theme.
+On Retail, Fly2048 also appears in the AddOn Compartment. Left-click it to play or right-click it to switch faction colours.
 
 Retail Midnight can restrict add-on messaging inside instanced content. Fly2048 detects that state and skips guild score broadcasts until messaging is available again; the game itself remains fully functional.
 
@@ -68,8 +69,8 @@ Enable Lua errors with `/console scriptErrors 1`, restart the client, and verify
 3. Rapid input queues only one follow-up direction and never duplicates tiles.
 4. Theme, motion, sound, scale, position, best score, and auto-popup persist after `/reload`.
 5. Divine Reset works once per game and resets on a new game.
-6. `/fly2048 demo` displays every tile tier legibly in both themes.
-7. `/fly2048 test` displays and animates guild ranking rows.
+6. `/fly2048 demo` displays every tile tier with the right loot icon, quality border and a legible number in both factions, and no bag slot shows as a green square.
+7. `/fly2048 test` displays and animates guild ranking rows, with the crown on rank 1.
 8. Taxi auto-popup opens and closes at the correct time.
 9. Retail's AddOn Compartment click and tooltip actions work.
 10. No new errors appear in BugSack/BugGrabber after a complete game.

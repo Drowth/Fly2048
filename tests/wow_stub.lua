@@ -26,6 +26,9 @@ function Methods:SetBackdropBorderColor() end
 function Methods:SetColorTexture() end
 function Methods:SetTexture() end
 function Methods:SetBlendMode() end
+function Methods:SetTexCoord() end
+function Methods:SetVertexColor() end
+function Methods:SetDesaturated() end
 function Methods:SetAlpha() end
 function Methods:SetWidth() end
 function Methods:SetHeight() end
@@ -85,6 +88,9 @@ end
 
 UIParent = NewObject("UIParent")
 GameTooltip = NewObject("GameTooltip")
+UISpecialFrames = {}
+GameFontNormalHuge = NewObject("Font")
+GameFontHighlightHuge = GameFontNormalHuge
 GameFontNormalLarge = NewObject("Font")
 GameFontHighlightLarge = GameFontNormalLarge
 GameFontNormal = NewObject("Font")
@@ -142,8 +148,19 @@ C_ChatInfo = {
 DEFAULT_CHAT_FRAME = { AddMessage = Noop }
 SlashCmdList = {}
 function PlaySoundFile() end
+function PlaySound() end
+-- Partial on purpose: exercises both the SOUNDKIT lookup and the numeric fallback.
+SOUNDKIT = { IG_MAINMENU_OPTION_CHECKBOX_ON = 856, LEVEL_UP = 888 }
+ITEM_QUALITY_COLORS = {
+  [0] = { r = 0.62, g = 0.62, b = 0.62 }, [1] = { r = 1, g = 1, b = 1 }, [2] = { r = 0.12, g = 1, b = 0 },
+  [3] = { r = 0, g = 0.44, b = 0.87 }, [4] = { r = 0.64, g = 0.21, b = 0.93 }, [5] = { r = 1, g = 0.5, b = 0 },
+  [6] = { r = 0.9, g = 0.8, b = 0.5 }, [7] = { r = 0, g = 0.8, b = 1 },
+}
+RAID_CLASS_COLORS = { MAGE = { r = 0.25, g = 0.78, b = 0.92 }, WARRIOR = { r = 0.78, g = 0.61, b = 0.43 } }
 function IsInGuild() return true end
 function UnitName() return "TestPilot", "TestRealm" end
+function UnitFactionGroup() return "Horde", "Horde" end
+function UnitClass() return "Mage", "MAGE" end
 function GetRealmName() return "TestRealm" end
 function GetNormalizedRealmName() return "TestRealm" end
 function Ambiguate(name) return name end
