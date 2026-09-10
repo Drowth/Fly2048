@@ -140,8 +140,12 @@ local SOUNDS = {
 }
 local PRESSURE_BEAT_INTERVAL = 1.00
 
--- Hidden corner button. Once pressed, the tune plays on the first open of every session.
-local SEA_SONG = SOUND_PATH .. "lost_at_sea.ogg"
+-- Hidden corner buttons, one in each bottom corner. Once pressed, that tune plays
+-- on the first open of every session until it is switched off again.
+local EGGS = {
+  { id = "sea", file = SOUND_PATH .. "lost_at_sea.ogg", flag = "lostAtSea", command = "lostatsea", corner = "BOTTOMLEFT", x = 13 },
+  { id = "bag", file = SOUND_PATH .. "paper_bag.ogg",   flag = "paperBag",  command = "paperbag",  corner = "BOTTOMRIGHT", x = -13 },
+}
 
 local MILESTONE_VALUES = { 512, 1024, 2048, 4096 }
 local CURSE_URL = "https://www.curseforge.com/wow/addons/fly2048"
@@ -182,7 +186,7 @@ local state = {
   scoreRollup = { active = false, fromVal = 0, toVal = 0, t = 0 },
   lboardLastRanks = {},
   guildPingCooldown = 0,
-  seaSongPlayed = false,
+  eggPlayed = {},
 }
 
 local ui = {
@@ -297,10 +301,10 @@ local function PlayKit(key)
   if PlaySound and id then PlaySound(id, "SFX") else PlaySoundFile(sound.file, "SFX") end
 end
 
-local function PlaySeaSong()
+local function PlayEgg(egg)
   if Fly2048DB and Fly2048DB.mute then return end
-  state.seaSongPlayed = true
-  PlaySoundFile(SEA_SONG, "SFX")
+  state.eggPlayed[egg.id] = true
+  PlaySoundFile(egg.file, "SFX")
 end
 
 local function After(delay, fn)
@@ -1063,10 +1067,14 @@ local function BuildUI()
   ui.comboText:Hide()
   CreateFrame("Button", nil, f, "UIPanelCloseButton"):SetPoint("TOPRIGHT", -4, -4)
 
-  ui.seaBtn = CreateFrame("Button", nil, f)
-  ui.seaBtn:SetSize(10, 10) ui.seaBtn:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 13, 13)
-  ui.seaBtn.tex = ui.seaBtn:CreateTexture(nil, "OVERLAY") ui.seaBtn.tex:SetAllPoints() ui.seaBtn.tex:SetColorTexture(1, 1, 1, 0.05)
-  ui.seaBtn:SetScript("OnClick", function() Fly2048DB.lostAtSea = true PlaySeaSong() end)
+  ui.eggBtns = {}
+  for _, egg in ipairs(EGGS) do
+    local button = CreateFrame("Button", nil, f)
+    button:SetSize(10, 10) button:SetPoint(egg.corner, f, egg.corner, egg.x, 13)
+    button.tex = button:CreateTexture(nil, "OVERLAY") button.tex:SetAllPoints() button.tex:SetColorTexture(1, 1, 1, 0.05)
+    button:SetScript("OnClick", function() Fly2048DB[egg.flag] = true PlayEgg(egg) end)
+    ui.eggBtns[egg.id] = button
+  end
 
   ui.rightTitle = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
   ui.rightTitle:SetPoint("TOPLEFT", f, "TOPLEFT", LBOARD_X, -(FRAME_PAD + 2))
@@ -1175,7 +1183,9 @@ local function BuildUI()
   end)
   f:SetScript("OnShow", function()
     f:SetFrameStrata("DIALOG") f:SetFrameLevel(100) ApplyPressureVisuals() UpdateUI()
-    if Fly2048DB.lostAtSea and not state.seaSongPlayed then PlaySeaSong() end
+    for _, egg in ipairs(EGGS) do
+      if Fly2048DB[egg.flag] and not state.eggPlayed[egg.id] then PlayEgg(egg) break end
+    end
   end)
   f:SetScript("OnUpdate", function(_, elapsed)
     ApplyShake(elapsed) MaybeHeartbeat(elapsed)
@@ -1262,6 +1272,13 @@ end
 SLASH_FLY20481 = "/fly2048"
 SlashCmdList["FLY2048"] = function(msg)
   local command, argument = (msg or ""):lower():match("^(%S*)%s*(.-)$")
+  for _, egg in ipairs(EGGS) do  -- undocumented: switch a corner-button tune off or on again
+    if command == egg.command then
+      Fly2048DB[egg.flag] = not Fly2048DB[egg.flag]
+      PrintMessage(Fly2048DB[egg.flag] and "Aye." or "Nay.")
+      return
+    end
+  end
   if command == "" then Toggle() return
   elseif command == "reset" or command == "r" then BuildUI() ResetGame() ui.frame:Show() state.autoShown = false return
   elseif command == "mute" or command == "sound" then ToggleSound() PrintMessage(Fly2048DB.mute and "Sound muted." or "Sound enabled.") return
@@ -1291,10 +1308,6 @@ SlashCmdList["FLY2048"] = function(msg)
     PrintMessage("Visual demo loaded. Use /fly2048 reset to return to a normal game.")
     return
   elseif command == "help" then PrintHelp() return
-  elseif command == "lostatsea" then  -- undocumented: turn the corner-button tune off or on again
-    Fly2048DB.lostAtSea = not Fly2048DB.lostAtSea
-    PrintMessage(Fly2048DB.lostAtSea and "Aye." or "Nay.")
-    return
   elseif command == "test" then
     BuildUI()
     local realm = (GetRealmName and GetRealmName()) or "Test"
