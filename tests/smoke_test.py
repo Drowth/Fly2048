@@ -63,11 +63,15 @@ for command in (
     slash(command)
     run_updates(3, 0.05)
 
-# Hidden corner button: sets the flag, then the tune fires on the next first open.
-assert not db.lostAtSea
+# Hidden corner buttons: each sets its own flag, then that tune fires on the
+# next first open of a session. Both toggle independently.
+assert not db.lostAtSea and not db.paperBag
 frame.Trigger(frame, "OnShow")
 frame.Trigger(frame, "OnShow")
-slash("lostatsea"); assert db.lostAtSea; slash("lostatsea"); assert not db.lostAtSea
+for cmd, flag in (("lostatsea", "lostAtSea"), ("paperbag", "paperBag")):
+    slash(cmd); assert db[flag], f"{cmd} did not set {flag}"
+    frame.Trigger(frame, "OnShow")
+    slash(cmd); assert not db[flag], f"{cmd} did not clear {flag}"
 
 lua.globals().Fly2048_OnAddonCompartmentClick("Fly2048", "LeftButton")
 lua.globals().Fly2048_OnAddonCompartmentClick("Fly2048", lua.table_from({"buttonName": "RightButton"}))
