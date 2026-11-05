@@ -183,6 +183,7 @@ local state = {
   scoreRollup = { active = false, fromVal = 0, toVal = 0, t = 0 },
   lboardLastRanks = {},
   guildPingCooldown = 0,
+  sync = { lastSend = nil, lastSendOk = nil, lastRecvFrom = nil, lastRecvAt = nil, retryQueued = false },
 }
 
 local ui = {
@@ -589,50 +590,103 @@ local function GetLocalKey()
   return (UnitName("player")) .. "-" .. LocalRealm()
 end
 
+-- Scores are kept per guild, so alts in different guilds (SavedVariables are
+-- account-wide) each see their own guild's board.
+local function CurrentGuildKey()
+  if not (IsInGuild and IsInGuild()) then return nil end
+  if not GetGuildInfo then return nil end
+  local name, _, _, realm = GetGuildInfo("player")
+  if not name or name == "" then return nil end
+  return name .. "-" .. ((realm and realm ~= "" and realm:gsub("[%s%-]", "")) or LocalRealm())
+end
+
+local function GuildBucket()
+  Fly2048DB.guilds = Fly2048DB.guilds or {}
+  local key = CurrentGuildKey() or "_pending"
+  local bucket = Fly2048DB.guilds[key]
+  if not bucket then
+    bucket = { scores = {}, classes = {} }
+    Fly2048DB.guilds[key] = bucket
+  end
+  return bucket, key
+end
+
+local function MergeBucket(into, from)
+  for k, v in pairs(from.scores or {}) do
+    if v > (into.scores[k] or 0) then into.scores[k] = v end
+  end
+  for k, v in pairs(from.classes or {}) do into.classes[k] = into.classes[k] or v end
+end
+
+-- Once the guild name is known, fold in scores that arrived before it was
+-- (and, once only, the flat pre-1.2.1 tables).
+local function SettleGuildBucket()
+  local bucket, key = GuildBucket()
+  if key == "_pending" then return false end
+  local guilds = Fly2048DB.guilds
+  if guilds._pending then MergeBucket(bucket, guilds._pending) guilds._pending = nil end
+  if guilds._legacy then MergeBucket(bucket, guilds._legacy) guilds._legacy = nil end
+  return true
+end
+
+local function InInstance()
+  local inInstance = IsInInstance and IsInInstance()
+  return inInstance and true or false
+end
+
+-- Midnight-era clients restrict addon messages inside instanced content. Only
+-- skip when we are actually in an instance; elsewhere just try the send and
+-- read its result, so a wrong "restricted" answer can never silence sync.
 local function GuildSyncRestricted()
-  return C_ChatInfo and C_ChatInfo.AreOutgoingAddonChatMessagesRestricted and C_ChatInfo.AreOutgoingAddonChatMessagesRestricted()
+  if not InInstance() then return false end
+  return C_ChatInfo and C_ChatInfo.AreOutgoingAddonChatMessagesRestricted and C_ChatInfo.AreOutgoingAddonChatMessagesRestricted() or false
+end
+
+local AutoPing  -- forward declaration
+
+local function SendGuild(msg)
+  if not (IsInGuild and IsInGuild()) or GuildSyncRestricted() then return false end
+  local sendFn = (C_ChatInfo and C_ChatInfo.SendAddonMessage) or SendAddonMessage
+  if not sendFn then return false end
+  local ok, result = pcall(sendFn, MSG_PREFIX, msg, "GUILD")
+  -- Old clients return nothing, newer ones true/false or Enum.SendAddonMessageResult (0 = Success).
+  local sent = ok and (result == nil or result == true or result == 0)
+  state.sync.lastSend, state.sync.lastSendOk = (GetTime and GetTime()) or 0, sent
+  state.sync.lastSendResult = ok and tostring(result) or ("error: " .. tostring(result))
+  if not sent and not state.sync.retryQueued then
+    state.sync.retryQueued = true
+    After(60, function() state.sync.retryQueued = false AutoPing(false) end)
+  end
+  return sent
 end
 
 local function BroadcastScore()
-  if not (IsInGuild and IsInGuild()) then return end
-  if GuildSyncRestricted() then return end
   if not state.best or state.best <= 0 then return end
-  local function send(msg)
-    if C_ChatInfo and C_ChatInfo.SendAddonMessage then
-      C_ChatInfo.SendAddonMessage(MSG_PREFIX, msg, "GUILD")
-    elseif SendAddonMessage then
-      SendAddonMessage(MSG_PREFIX, msg, "GUILD")
-    end
-  end
   -- Legacy form first so older Fly2048 clients still parse the score, then the
   -- class-tagged form used for class colours on the flightboard.
-  send("SCORE:" .. state.best)
+  if not SendGuild("SCORE:" .. state.best) then return end
   local classFile = LocalClassFile()
-  if classFile then send("SCORE:" .. state.best .. ":" .. classFile) end
+  if classFile then SendGuild("SCORE:" .. state.best .. ":" .. classFile) end
 end
 
-local function BroadcastRequest()
+local function BroadcastRequest() SendGuild("REQUEST") end
+
+-- Background sync runs silently on login, guild changes and every few minutes.
+-- Only the manual button starts the visible cooldown.
+AutoPing = function(manual)
   if not (IsInGuild and IsInGuild()) then return end
-  if GuildSyncRestricted() then return end
-  if C_ChatInfo and C_ChatInfo.SendAddonMessage then
-    C_ChatInfo.SendAddonMessage(MSG_PREFIX, "REQUEST", "GUILD")
-  elseif SendAddonMessage then
-    SendAddonMessage(MSG_PREFIX, "REQUEST", "GUILD")
+  if manual then
+    if state.guildPingCooldown > 0 then return end
+    state.guildPingCooldown = GUILD_PING_CD + GUILD_BROADCAST_DELAY
+    if ui.pingBtn then ui.pingBtn:Disable() end
+    After(GUILD_PING_CD + GUILD_BROADCAST_DELAY, function()
+      state.guildPingCooldown = 0
+      if ui.pingBtn and IsInGuild and IsInGuild() then ui.pingBtn:Enable() end
+    end)
   end
-end
-
-local function AutoPing()
-  if not (IsInGuild and IsInGuild()) then return end
-  if state.guildPingCooldown > 0 then return end
-  state.guildPingCooldown = GUILD_PING_CD + GUILD_BROADCAST_DELAY
-  if ui.pingBtn then ui.pingBtn:Disable() end
   After(GUILD_BROADCAST_DELAY, function()
     BroadcastRequest()
     BroadcastScore()
-  end)
-  After(GUILD_PING_CD + GUILD_BROADCAST_DELAY, function()
-    state.guildPingCooldown = 0
-    if ui.pingBtn and IsInGuild and IsInGuild() then ui.pingBtn:Enable() end
   end)
 end
 
@@ -645,19 +699,18 @@ local function HandleAddonMessage(prefix, msg, channel, senderFull)
   if Ambiguate then sender = Ambiguate(senderFull, "none") end
   if not sender:find("%-") then sender = sender .. "-" .. LocalRealm() end
   if sender == GetLocalKey() then return end
+  state.sync.lastRecvFrom, state.sync.lastRecvAt = sender, (GetTime and GetTime()) or 0
   local scoreStr, classFile = msg:match("^SCORE:(%d+):?(%u*)$")
   local score = tonumber(scoreStr)
   if score then
-    Fly2048DB.guildScores = Fly2048DB.guildScores or {}
-    Fly2048DB.guildClasses = Fly2048DB.guildClasses or {}
+    local bucket = GuildBucket()
     local changed = false
-    if classFile and classFile ~= "" and Fly2048DB.guildClasses[sender] ~= classFile then
-      Fly2048DB.guildClasses[sender] = classFile
+    if classFile and classFile ~= "" and bucket.classes[sender] ~= classFile then
+      bucket.classes[sender] = classFile
       changed = true
     end
-    local existing = Fly2048DB.guildScores[sender] or 0
-    if score > existing then
-      Fly2048DB.guildScores[sender] = score
+    if score > (bucket.scores[sender] or 0) then
+      bucket.scores[sender] = score
       changed = true
     end
     if changed then RefreshLeaderboard() end
@@ -669,9 +722,9 @@ end
 local function BuildSortedGuild()
   local list = {}
   local localKey = GetLocalKey()
-  Fly2048DB.guildScores = Fly2048DB.guildScores or {}
-  local classes = Fly2048DB.guildClasses or {}
-  for k, v in pairs(Fly2048DB.guildScores) do
+  local bucket = GuildBucket()
+  local classes = bucket.classes
+  for k, v in pairs(bucket.scores) do
     if k ~= localKey then
       list[#list + 1] = { name = k, score = v, isLocal = false, class = classes[k] }
     end
@@ -1102,7 +1155,7 @@ local function BuildUI()
 
   ui.pingBtn = CreateWoWButton(f, "Refresh guild scores", GUILD_PANEL_W, 22)
   ui.pingBtn:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", LBOARD_X, FRAME_PAD)
-  ui.pingBtn:SetScript("OnClick", function() if state.guildPingCooldown <= 0 then AutoPing() end end)
+  ui.pingBtn:SetScript("OnClick", function() if state.guildPingCooldown <= 0 then AutoPing(true) end end)
   AddTooltip(ui.pingBtn, "Guild scores", "Ask online guild members running Fly2048 for their best score.")
 
   ui.guildRows = {}
@@ -1249,7 +1302,7 @@ end
 local function PrintHelp()
   PrintMessage("/fly2048 - show or hide")
   PrintMessage("reset | mute | auto | theme [alliance/horde] | motion [full/reduced]")
-  PrintMessage("scale [0.75-1.25] | center | demo | test | testclear")
+  PrintMessage("scale [0.75-1.25] | center | demo | sync | test | testclear")
 end
 
 SLASH_FLY20481 = "/fly2048"
@@ -1284,18 +1337,30 @@ SlashCmdList["FLY2048"] = function(msg)
     PrintMessage("Visual demo loaded. Use /fly2048 reset to return to a normal game.")
     return
   elseif command == "help" then PrintHelp() return
+  elseif command == "sync" then
+    local sync, now = state.sync, (GetTime and GetTime()) or 0
+    local registered = C_ChatInfo and C_ChatInfo.IsAddonMessagePrefixRegistered and C_ChatInfo.IsAddonMessagePrefixRegistered(MSG_PREFIX)
+    local bucket, key = GuildBucket()
+    local count = 0 for _ in pairs(bucket.scores) do count = count + 1 end
+    PrintMessage(("Guild: %s | prefix registered: %s | in instance: %s | restricted: %s"):format(
+      key, tostring(registered), tostring(InInstance()), tostring(GuildSyncRestricted())))
+    PrintMessage(sync.lastSend and ("Last send %ds ago: %s (%s)"):format(now - sync.lastSend, sync.lastSendOk and "ok" or "failed", sync.lastSendResult or "?") or "Nothing sent yet this session.")
+    PrintMessage(sync.lastRecvAt and ("Last heard from %s %ds ago. %d guild scores stored."):format(sync.lastRecvFrom, now - sync.lastRecvAt, count) or ("Nothing received yet this session. %d guild scores stored."):format(count))
+    AutoPing(false)
+    return
   elseif command == "test" then
     BuildUI()
-    local realm = (GetRealmName and GetRealmName()) or "Test"
+    local realm = LocalRealm()
     local fakes = { {"Arthas", 8192}, {"Sylvanas", 4096}, {"Thrall", 2048}, {"Jaina", 1024}, {"Garrosh", 512} }
-    Fly2048DB.guildScores = Fly2048DB.guildScores or {}
-    for _, pair in ipairs(fakes) do Fly2048DB.guildScores[pair[1] .. "-" .. realm] = pair[2] end
+    local bucket = GuildBucket()
+    for _, pair in ipairs(fakes) do bucket.scores[pair[1] .. "-" .. realm] = pair[2] end
     RefreshLeaderboard()
     ui.frame:Show()
     PrintMessage("Test scores added. Use /fly2048 testclear to remove them.")
     return
   elseif command == "testclear" then
-    Fly2048DB.guildScores = {}
+    local bucket = GuildBucket()
+    bucket.scores, bucket.classes = {}, {}
     if ui.frame then RefreshLeaderboard() end
     PrintMessage("Test scores cleared.")
     return
@@ -1326,8 +1391,12 @@ boot:RegisterEvent("ADDON_LOADED")
 boot:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4)
   if event == "ADDON_LOADED" and arg1 == ADDON_NAME then
     Fly2048DB.best, Fly2048DB.mute, Fly2048DB.autopopup = tonumber(Fly2048DB.best) or 0, (Fly2048DB.mute == true), (Fly2048DB.autopopup ~= false)
-    Fly2048DB.guildScores = Fly2048DB.guildScores or {}
-    Fly2048DB.guildClasses = Fly2048DB.guildClasses or {}
+    Fly2048DB.guilds = Fly2048DB.guilds or {}
+    if Fly2048DB.guildScores or Fly2048DB.guildClasses then
+      -- Pre-1.2.1 kept one flat table for every guild; fold it into the first guild seen.
+      Fly2048DB.guilds._legacy = { scores = Fly2048DB.guildScores or {}, classes = Fly2048DB.guildClasses or {} }
+      Fly2048DB.guildScores, Fly2048DB.guildClasses = nil, nil
+    end
     -- Old "arcane"/"ember" (or missing) themes become the player's faction. Only
     -- store a key once the faction is known; GetTheme() copes with nil meanwhile.
     if not THEMES[Fly2048DB.theme] then Fly2048DB.theme = PlayerFaction() and DefaultThemeKey() or nil end
@@ -1343,12 +1412,13 @@ boot:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4)
     end
     BuildUI()
     self:RegisterEvent("PLAYER_CONTROL_LOST") self:RegisterEvent("PLAYER_CONTROL_GAINED") self:RegisterEvent("PLAYER_ENTERING_WORLD")
-    self:RegisterEvent("CHAT_MSG_ADDON")
-    AutoPing()
+    self:RegisterEvent("CHAT_MSG_ADDON") self:RegisterEvent("PLAYER_GUILD_UPDATE")
+    SettleGuildBucket()
+    AutoPing(false)
     if C_Timer and C_Timer.NewTicker then
-      C_Timer.NewTicker(GUILD_AUTO_INTERVAL, function() AutoPing() end)
+      C_Timer.NewTicker(GUILD_AUTO_INTERVAL, function() AutoPing(false) end)
     else
-      local function scheduleNext() After(GUILD_AUTO_INTERVAL, function() AutoPing() scheduleNext() end) end
+      local function scheduleNext() After(GUILD_AUTO_INTERVAL, function() AutoPing(false) scheduleNext() end) end
       scheduleNext()
     end
     return
@@ -1357,6 +1427,14 @@ boot:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4)
     HandleAddonMessage(arg1, arg2, arg3, arg4)
     return
   end
+  if event == "PLAYER_GUILD_UPDATE" or event == "PLAYER_ENTERING_WORLD" then
+    -- Guild info is often not ready at ADDON_LOADED; sync as soon as it is,
+    -- whatever the taxi auto-popup setting.
+    SettleGuildBucket()
+    if ui.frame then RefreshLeaderboard() end
+    AutoPing(false)
+    if event == "PLAYER_GUILD_UPDATE" then return end
+  end
   if event == "PLAYER_ENTERING_WORLD" and Fly2048DB and not THEMES[Fly2048DB.theme] and PlayerFaction() then
     -- Faction was unknown at ADDON_LOADED; settle the default now.
     Fly2048DB.theme = DefaultThemeKey() ApplyTheme() UpdateUI()
@@ -1364,5 +1442,5 @@ boot:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4)
   if not Fly2048DB or Fly2048DB.autopopup ~= true then return end
   if event == "PLAYER_CONTROL_LOST" then After(0.20, function() if UnitOnTaxi and UnitOnTaxi("player") then if not ui.frame:IsShown() then if not next(state.tiles) then ResetGame() end ui.frame:Show() end state.autoShown = true end end)
   elseif event == "PLAYER_CONTROL_GAINED" then After(0.10, function() if not (UnitOnTaxi and UnitOnTaxi("player")) and state.autoShown then if ui.frame then ui.frame:Hide() end state.autoShown = false end end)
-  elseif event == "PLAYER_ENTERING_WORLD" then AutoPing() After(0.50, function() if UnitOnTaxi and UnitOnTaxi("player") then if not ui.frame:IsShown() then if not next(state.tiles) then ResetGame() end ui.frame:Show() end state.autoShown = true else if state.autoShown then if ui.frame then ui.frame:Hide() end state.autoShown = false end end end) end
+  elseif event == "PLAYER_ENTERING_WORLD" then After(0.50, function() if UnitOnTaxi and UnitOnTaxi("player") then if not ui.frame:IsShown() then if not next(state.tiles) then ResetGame() end ui.frame:Show() end state.autoShown = true else if state.autoShown then if ui.frame then ui.frame:Hide() end state.autoShown = false end end end) end
 end)

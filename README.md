@@ -54,6 +54,7 @@ The resulting path must end in `Interface/AddOns/Fly2048/Fly2048.lua`. Fully res
 - `/fly2048 center` — return the window to screen centre
 - `/fly2048 demo` — load a visual palette and animation test board
 - `/fly2048 test` and `/fly2048 testclear` — add or remove guild leaderboard test data
+- `/fly2048 sync` — show guild sync status (guild, last send, last score heard) and resync now
 - `/fly2048 help` — show the command summary
 
 On Retail, Fly2048 also appears in the AddOn Compartment. Left-click it to play or right-click it to switch faction colours.
