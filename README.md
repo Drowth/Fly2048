@@ -85,7 +85,7 @@ Blizzard marks an add-on out of date whenever a patch raises the client's Interf
 
 One-off setup:
 
-1. Add a `## X-Curse-Project-ID: <id>` line to both TOCs (the id is on the CurseForge project page). For Wago, also add `## X-Wago-ID: <id>`.
+1. The TOCs carry `## X-Curse-Project-ID: 1462877`. For Wago, also add `## X-Wago-ID: <id>` to each TOC.
 2. Add repository secrets `CF_API_KEY` (CurseForge, Account > API Tokens) and optionally `WAGO_API_TOKEN`.
 3. Under Settings > Actions > General, allow GitHub Actions to create pull requests.
 
