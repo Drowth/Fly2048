@@ -26,14 +26,14 @@ PREFERRED_REGIONS = ("us", "eu", "kr", "tw", "cn")
 
 # TOC file -> Blizzard product codes whose live builds it should load on.
 TARGETS = {
-    "Fly2048/Fly2048_Mainline.toc": ["wow", "wow_forever"],
-    "Fly2048/Fly2048_Forever.toc": ["wow_forever"],
+    "Fly2048/Fly2048_Mainline.toc": ["wow", "wowf"],
+    "Fly2048/Fly2048_Forever.toc": ["wowf"],
     "Fly2048/Fly2048.toc": [
         "wow_classic",        # current progression Classic
         "wow_classic_titan",  # Titan-Reforged Classic
         "wow_anniversary",    # Classic Anniversary realms
         "wow_classic_era",    # Classic Era / Hardcore
-        "wow_forever",        # WoW Forever (1.60.x, Mainline API)
+        "wowf",               # WoW Forever (1.60.x, Mainline API)
     ],
 }
 
