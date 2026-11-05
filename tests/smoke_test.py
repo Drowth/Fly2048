@@ -13,7 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 lua = LuaRuntime(unpack_returned_tuples=True)
 lua.execute((ROOT / "tests" / "wow_stub.lua").read_text(encoding="utf-8"))
 # Pre-seed a 1.1 saved theme so the faction migration path is exercised.
-lua.execute('Fly2048DB = { theme = "arcane" }')
+# Also seed the removed hidden-tune flags so their cleanup is exercised.
+lua.execute('Fly2048DB = { theme = "arcane", lostAtSea = true, paperBag = true }')
 lua.execute((ROOT / "Fly2048" / "Fly2048.lua").read_text(encoding="utf-8"))
 
 trigger_event = lua.globals().Fly2048_TestTriggerEvent
@@ -39,6 +40,11 @@ assert db.guildScores["Arthas-TestRealm"] == 5000
 assert db.guildClasses["Arthas-TestRealm"] == "MAGE"
 assert db.guildScores["Thrall-TestRealm"] == 4000
 
+# The player's own broadcast arrives with the normalised realm ("TestRealm")
+# while GetRealmName() returns "Test Realm". It must be recognised as local.
+trigger_event("CHAT_MSG_ADDON", "Fly2048", "SCORE:9999:MAGE", "GUILD", "TestPilot-TestRealm")
+assert db.guildScores["TestPilot-TestRealm"] is None, "own score was stored as another guild member"
+
 frame = lua.globals().Fly2048Frame
 for key in ("LEFT", "UP", "RIGHT", "DOWN", "A", "W", "D", "S"):
     frame.Trigger(frame, "OnKeyDown", key)
@@ -63,15 +69,8 @@ for command in (
     slash(command)
     run_updates(3, 0.05)
 
-# Hidden corner buttons: each sets its own flag, then that tune fires on the
-# next first open of a session. Both toggle independently.
-assert not db.lostAtSea and not db.paperBag
-frame.Trigger(frame, "OnShow")
-frame.Trigger(frame, "OnShow")
-for cmd, flag in (("lostatsea", "lostAtSea"), ("paperbag", "paperBag")):
-    slash(cmd); assert db[flag], f"{cmd} did not set {flag}"
-    frame.Trigger(frame, "OnShow")
-    slash(cmd); assert not db[flag], f"{cmd} did not clear {flag}"
+assert db.lostAtSea is None and db.paperBag is None, "removed tune flags were not cleared"
+assert slash("lostatsea") is None  # falls through to the normal command handler
 
 lua.globals().Fly2048_OnAddonCompartmentClick("Fly2048", "LeftButton")
 lua.globals().Fly2048_OnAddonCompartmentClick("Fly2048", lua.table_from({"buttonName": "RightButton"}))

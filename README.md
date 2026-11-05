@@ -4,10 +4,10 @@ Fly2048 is a lightweight 2048 mini-game for World of Warcraft, designed for taxi
 
 ## Supported clients
 
-- WoW Retail: Midnight 12.1 (`Fly2048_Mainline.toc`, Interface `120100`)
-- WoW Classic Anniversary: Burning Crusade Classic 2.5.6 (`Fly2048.toc`, Interface `20506`)
+- WoW Retail (`Fly2048_Mainline.toc`)
+- WoW Classic: progression Classic, Titan-Reforged, Classic Anniversary and Classic Era (`Fly2048.toc`)
 
-Both clients use the same guarded Lua implementation and SavedVariables schema so fixes do not drift between editions.
+Both TOCs load the same guarded Lua file and SavedVariables schema, so fixes do not drift between editions. Every Blizzard API call that differs between clients is checked before use and has a fallback.
 
 ## Warcraft loot interface
 
@@ -22,8 +22,6 @@ Version `1.2.0-beta.1` rebuilds the look with Blizzard's own art:
 - Esc closes the window; Retail AddOn Compartment support
 
 Saved `arcane` or `ember` themes from earlier betas migrate to your faction's theme on first load.
-
-This work is isolated on the `feature/dynamic-ui-retail` branch until it has completed in-game testing.
 
 ## Installation
 
@@ -74,3 +72,19 @@ Enable Lua errors with `/console scriptErrors 1`, restart the client, and verify
 8. Taxi auto-popup opens and closes at the correct time.
 9. Retail's AddOn Compartment click and tooltip actions work.
 10. No new errors appear in BugSack/BugGrabber after a complete game.
+
+## Keeping it current
+
+Blizzard marks an add-on out of date whenever a patch raises the client's Interface number. Three workflows keep Fly2048 loading without manual edits:
+
+- **Interface bump** runs every Wednesday, reads the live build of every supported client from Blizzard's patch service, and opens a pull request when a TOC is behind. Merge it and tag a release.
+- **Release** runs on any `v*` tag and uploads the package with the BigWigs packager. Tags containing `alpha` or `beta` publish as those release types.
+- **Tests** runs the mocked WoW smoke test on every push and pull request.
+
+One-off setup:
+
+1. Add a `## X-Curse-Project-ID: <id>` line to both TOCs (the id is on the CurseForge project page). For Wago, also add `## X-Wago-ID: <id>`.
+2. Add repository secrets `CF_API_KEY` (CurseForge, Account > API Tokens) and optionally `WAGO_API_TOKEN`.
+3. Under Settings > Actions > General, allow GitHub Actions to create pull requests.
+
+Run the checks locally with `python -m pip install lupa`, then `python tests/smoke_test.py` and `python tests/test_update_interface.py`. `python tools/update_interface.py` bumps the TOCs by hand.

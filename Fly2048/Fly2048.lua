@@ -1,5 +1,5 @@
 -- Fly2048.lua
--- 2048 mini game for WoW Classic Anniversary and Retail.
+-- 2048 mini game for every WoW client: Retail and all Classic flavours.
 -- Slash: /fly2048 help for controls and appearance commands.
 
 Fly2048DB = Fly2048DB or {}
@@ -32,6 +32,9 @@ local SHAKE_DUR = 0.10
 local SHAKE_AMP = 3
 
 local WHITE_TEXTURE = "Interface\\Buttons\\WHITE8X8"
+-- Clients from 9.0 on need BackdropTemplate for SetBackdrop; older ones have
+-- SetBackdrop natively and no template, so only ask for it when it exists.
+local BACKDROP_TEMPLATE = BackdropTemplateMixin and "BackdropTemplate" or nil
 
 -- Blizzard art that ships in both Classic Anniversary (TBC) and Retail.
 local TEX = {
@@ -140,12 +143,6 @@ local SOUNDS = {
 }
 local PRESSURE_BEAT_INTERVAL = 1.00
 
--- Hidden corner buttons, one in each bottom corner. Once pressed, that tune plays
--- on the first open of every session until it is switched off again.
-local EGGS = {
-  { id = "sea", file = SOUND_PATH .. "lost_at_sea.ogg", flag = "lostAtSea", command = "lostatsea", corner = "BOTTOMLEFT", x = 13 },
-  { id = "bag", file = SOUND_PATH .. "paper_bag.ogg",   flag = "paperBag",  command = "paperbag",  corner = "BOTTOMRIGHT", x = -13 },
-}
 
 local MILESTONE_VALUES = { 512, 1024, 2048, 4096 }
 local CURSE_URL = "https://www.curseforge.com/wow/addons/fly2048"
@@ -186,7 +183,6 @@ local state = {
   scoreRollup = { active = false, fromVal = 0, toVal = 0, t = 0 },
   lboardLastRanks = {},
   guildPingCooldown = 0,
-  eggPlayed = {},
 }
 
 local ui = {
@@ -301,12 +297,6 @@ local function PlayKit(key)
   if PlaySound and id then PlaySound(id, "SFX") else PlaySoundFile(sound.file, "SFX") end
 end
 
-local function PlayEgg(egg)
-  if Fly2048DB and Fly2048DB.mute then return end
-  state.eggPlayed[egg.id] = true
-  PlaySoundFile(egg.file, "SFX")
-end
-
 local function After(delay, fn)
   if C_Timer and C_Timer.After then C_Timer.After(delay, fn) else fn() end
 end
@@ -366,7 +356,7 @@ end
 
 -- Tooltip-style inner panel (dark Blizzard backdrop, tinted per theme).
 local function CreatePanel(parent, backgroundKey)
-  local panel = CreateFrame("Frame", nil, parent, "BackdropTemplate")
+  local panel = CreateFrame("Frame", nil, parent, BACKDROP_TEMPLATE)
   panel:SetBackdrop(BACKDROP_TOOLTIP)
   panel.themeBackgroundKey = backgroundKey or "panel"
   ui.themeRefs[#ui.themeRefs + 1] = panel
@@ -535,7 +525,7 @@ end
 local function CreateTile(r, c, value, isSpawn)
   local id = state.nextId
   state.nextId = state.nextId + 1
-  local f = CreateFrame("Frame", nil, ui.board, "BackdropTemplate") f:SetSize(TILE_SIZE, TILE_SIZE)
+  local f = CreateFrame("Frame", nil, ui.board, BACKDROP_TEMPLATE) f:SetSize(TILE_SIZE, TILE_SIZE)
   f:SetBackdrop({ edgeFile = WHITE_TEXTURE, edgeSize = 2 })
   -- Item-slot stack: dark base, loot icon, vignette band for the number, quality glow.
   local base = f:CreateTexture(nil, "BACKGROUND") base:SetPoint("TOPLEFT", f, "TOPLEFT", 1, -1) base:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -1, 1) base:SetColorTexture(0.04, 0.04, 0.05, 1)
@@ -584,10 +574,19 @@ local function PutCurseLinkInChat() if ChatFrame_OpenChat then ChatFrame_OpenCha
 -- ==============================
 -- Guild Messaging
 -- ==============================
+-- Addon message senders arrive as "Name-NormalizedRealm" (no spaces or
+-- hyphens), so the local key must use the same form or the player shows up
+-- twice on realms such as "Twisting Nether".
+local function LocalRealm()
+  local realm = GetNormalizedRealmName and GetNormalizedRealmName()
+  if not realm or realm == "" then
+    realm = ((GetRealmName and GetRealmName()) or ""):gsub("[%s%-]", "")
+  end
+  return realm ~= "" and realm or "Unknown"
+end
+
 local function GetLocalKey()
-  local name, realm = UnitName("player")
-  realm = realm or (GetRealmName and GetRealmName()) or (GetNormalizedRealmName and GetNormalizedRealmName()) or "Unknown"
-  return name .. "-" .. realm
+  return (UnitName("player")) .. "-" .. LocalRealm()
 end
 
 local function GuildSyncRestricted()
@@ -644,11 +643,7 @@ local function HandleAddonMessage(prefix, msg, channel, senderFull)
   if channel ~= "GUILD" then return end
   local sender = senderFull or ""
   if Ambiguate then sender = Ambiguate(senderFull, "none") end
-  if not sender:find("%-") then
-    local _, realm = UnitName("player")
-    realm = realm or (GetRealmName and GetRealmName()) or ""
-    sender = sender .. "-" .. realm
-  end
+  if not sender:find("%-") then sender = sender .. "-" .. LocalRealm() end
   if sender == GetLocalKey() then return end
   local scoreStr, classFile = msg:match("^SCORE:(%d+):?(%u*)$")
   local score = tonumber(scoreStr)
@@ -1014,7 +1009,7 @@ local function BuildUI()
   if ui.frame then return end
   local w = LBOARD_X + GUILD_PANEL_W + FRAME_PAD
   local h = FRAME_PAD*2 + HEADER_H + BOARD_INNER_W
-  local f = CreateFrame("Frame", "Fly2048Frame", UIParent, "BackdropTemplate")
+  local f = CreateFrame("Frame", "Fly2048Frame", UIParent, BACKDROP_TEMPLATE)
   ui.frame = f
   f:SetSize(w, h)
   if Fly2048DB.position and Fly2048DB.position.point then
@@ -1066,15 +1061,6 @@ local function BuildUI()
   ui.comboText:SetPoint("TOPRIGHT", f, "TOPLEFT", FRAME_PAD + BOARD_INNER_W, -(FRAME_PAD + HEADER_H - 20))
   ui.comboText:Hide()
   CreateFrame("Button", nil, f, "UIPanelCloseButton"):SetPoint("TOPRIGHT", -4, -4)
-
-  ui.eggBtns = {}
-  for _, egg in ipairs(EGGS) do
-    local button = CreateFrame("Button", nil, f)
-    button:SetSize(10, 10) button:SetPoint(egg.corner, f, egg.corner, egg.x, 13)
-    button.tex = button:CreateTexture(nil, "OVERLAY") button.tex:SetAllPoints() button.tex:SetColorTexture(1, 1, 1, 0.05)
-    button:SetScript("OnClick", function() Fly2048DB[egg.flag] = true PlayEgg(egg) end)
-    ui.eggBtns[egg.id] = button
-  end
 
   ui.rightTitle = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
   ui.rightTitle:SetPoint("TOPLEFT", f, "TOPLEFT", LBOARD_X, -(FRAME_PAD + 2))
@@ -1148,7 +1134,7 @@ local function BuildUI()
   ui.board = CreatePanel(ui.boardWrap, "board") ui.board:SetAllPoints()
   ui.pressureTex = ui.board:CreateTexture(nil, "OVERLAY") ui.pressureTex:SetAllPoints() ui.pressureTex:SetBlendMode("ADD")
   ui.boardGlow = ui.board:CreateTexture(nil, "OVERLAY") ui.boardGlow:SetAllPoints() ui.boardGlow:SetBlendMode("ADD")
-  ui.pressureBorder = CreateFrame("Frame", nil, ui.board, "BackdropTemplate")
+  ui.pressureBorder = CreateFrame("Frame", nil, ui.board, BACKDROP_TEMPLATE)
   ui.pressureBorder:SetAllPoints() ui.pressureBorder:SetFrameLevel(ui.board:GetFrameLevel() + 8)
   ui.pressureBorder:SetBackdrop({ edgeFile = WHITE_TEXTURE, edgeSize = 3 })
   for r = 1, GRID do
@@ -1183,9 +1169,6 @@ local function BuildUI()
   end)
   f:SetScript("OnShow", function()
     f:SetFrameStrata("DIALOG") f:SetFrameLevel(100) ApplyPressureVisuals() UpdateUI()
-    for _, egg in ipairs(EGGS) do
-      if Fly2048DB[egg.flag] and not state.eggPlayed[egg.id] then PlayEgg(egg) break end
-    end
   end)
   f:SetScript("OnUpdate", function(_, elapsed)
     ApplyShake(elapsed) MaybeHeartbeat(elapsed)
@@ -1272,13 +1255,6 @@ end
 SLASH_FLY20481 = "/fly2048"
 SlashCmdList["FLY2048"] = function(msg)
   local command, argument = (msg or ""):lower():match("^(%S*)%s*(.-)$")
-  for _, egg in ipairs(EGGS) do  -- undocumented: switch a corner-button tune off or on again
-    if command == egg.command then
-      Fly2048DB[egg.flag] = not Fly2048DB[egg.flag]
-      PrintMessage(Fly2048DB[egg.flag] and "Aye." or "Nay.")
-      return
-    end
-  end
   if command == "" then Toggle() return
   elseif command == "reset" or command == "r" then BuildUI() ResetGame() ui.frame:Show() state.autoShown = false return
   elseif command == "mute" or command == "sound" then ToggleSound() PrintMessage(Fly2048DB.mute and "Sound muted." or "Sound enabled.") return
@@ -1357,6 +1333,7 @@ boot:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4)
     if not THEMES[Fly2048DB.theme] then Fly2048DB.theme = PlayerFaction() and DefaultThemeKey() or nil end
     if Fly2048DB.motion ~= "reduced" then Fly2048DB.motion = "full" end
     Fly2048DB.uiScale = Clamp(tonumber(Fly2048DB.uiScale) or 1, 0.75, 1.25)
+    Fly2048DB.lostAtSea, Fly2048DB.paperBag = nil, nil  -- removed hidden-tune flags
     Fly2048DB.schemaVersion = 3
     state.best = Fly2048DB.best
     if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then

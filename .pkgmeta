@@ -1,0 +1,11 @@
+package-as: Fly2048
+
+# The addon lives in a subfolder, so lift it to the package root.
+move-folders:
+  Fly2048/Fly2048: Fly2048
+
+ignore:
+  - tests
+  - tools
+  - dist
+  - "*.zip"
