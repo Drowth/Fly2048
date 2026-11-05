@@ -158,10 +158,10 @@ ITEM_QUALITY_COLORS = {
 }
 RAID_CLASS_COLORS = { MAGE = { r = 0.25, g = 0.78, b = 0.92 }, WARRIOR = { r = 0.78, g = 0.61, b = 0.43 } }
 function IsInGuild() return true end
-function UnitName() return "TestPilot", "TestRealm" end
+function UnitName() return "TestPilot" end
 function UnitFactionGroup() return "Horde", "Horde" end
 function UnitClass() return "Mage", "MAGE" end
-function GetRealmName() return "TestRealm" end
+function GetRealmName() return "Test Realm" end
 function GetNormalizedRealmName() return "TestRealm" end
 function Ambiguate(name) return name end
 function UnitOnTaxi() return false end

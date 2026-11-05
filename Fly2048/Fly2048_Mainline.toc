@@ -1,4 +1,4 @@
-## Interface: 120100
+## Interface: 120105, 16001
 ## Title: Fly2048
 ## Notes: A 2048 mini game dressed in Warcraft loot, for flights, queues, and downtime
 ## Author: LeeGrieve
@@ -6,6 +6,7 @@
 ## Category: Other
 ## IconTexture: Interface\Icons\INV_Misc_Dice_02
 ## SavedVariables: Fly2048DB
+## X-Curse-Project-ID: 1462877
 ## AddonCompartmentFunc: Fly2048_OnAddonCompartmentClick
 ## AddonCompartmentFuncOnEnter: Fly2048_OnAddonCompartmentEnter
 ## AddonCompartmentFuncOnLeave: Fly2048_OnAddonCompartmentLeave

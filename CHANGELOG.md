@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Added WoW Forever support (Interface 16001) with its own `Fly2048_Forever.toc`.
+- The TOCs now cover Retail plus progression Classic, Titan-Reforged, Classic Anniversary and Classic Era.
+- Fixed the player appearing twice on the guild leaderboard on realms with a space in the name.
+- Frames only request BackdropTemplate on clients that have it.
+- Removed the hidden corner buttons and their tunes, and the add-on is about 1.2 MB smaller as a result.
+- Added weekly automatic TOC Interface bumps, tagged releases to CurseForge, and CI tests.
+
 ## 1.2.0-beta.1
 
 - Rebuilt the interface with Blizzard frame art, panels and buttons.

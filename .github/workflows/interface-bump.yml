@@ -1,0 +1,42 @@
+name: Interface bump
+
+# Every Wednesday (after Tuesday/Wednesday patch maintenance) check Blizzard's
+# live builds and open a PR if any TOC Interface number is out of date.
+on:
+  schedule:
+    - cron: "0 9 * * 3"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Update TOC Interface lines
+        run: python tools/update_interface.py
+      - name: Open a pull request if anything changed
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if git diff --quiet -- Fly2048; then
+            echo "TOCs already current."
+            exit 0
+          fi
+          branch="auto/interface-bump"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          git commit -am "Bump TOC Interface to the live game builds"
+          git push --force -u origin "$branch"
+          if [ -z "$(gh pr list --head "$branch" --state open --json number --jq '.[0].number')" ]; then
+            gh pr create --head "$branch" --base main \
+              --title "Bump TOC Interface to the live game builds" \
+              --body "Automated weekly check against Blizzard's patch service. Merge, then tag a release so CurseForge gets the new TOCs."
+          fi
