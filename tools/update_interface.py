@@ -4,10 +4,10 @@ Blizzard publishes every product's live version on its public patch service,
 for example 12.1.5.65000 for Retail. The TOC Interface number is that version
 packed as major*10000 + minor*100 + patch, so 12.1.5 becomes 120105.
 
-Each TOC keeps one Interface number per game major version. A fetched build
-replaces the number that shares its major version, or is added when that major
-is new to the file. A product that cannot be fetched leaves its number alone,
-so a network failure never strips a flavour from a TOC.
+Each fetched build replaces the existing number with the same major version
+that is closest to it (so Classic Era 1.15 and WoW Forever 1.60 stay apart),
+or is added when nothing matches. A product that cannot be fetched leaves its
+number alone, so a network failure never strips a flavour from a TOC.
 
 Usage: python tools/update_interface.py [--check]
   --check  exit 1 if any TOC is out of date, without writing.
@@ -26,12 +26,14 @@ PREFERRED_REGIONS = ("us", "eu", "kr", "tw", "cn")
 
 # TOC file -> Blizzard product codes whose live builds it should load on.
 TARGETS = {
-    "Fly2048/Fly2048_Mainline.toc": ["wow"],
+    "Fly2048/Fly2048_Mainline.toc": ["wow", "wow_forever"],
+    "Fly2048/Fly2048_Forever.toc": ["wow_forever"],
     "Fly2048/Fly2048.toc": [
         "wow_classic",        # current progression Classic
         "wow_classic_titan",  # Titan-Reforged Classic
         "wow_anniversary",    # Classic Anniversary realms
         "wow_classic_era",    # Classic Era / Hardcore
+        "wow_forever",        # WoW Forever (1.60.x, Mainline API)
     ],
 }
 
@@ -78,10 +80,17 @@ def fetch_interface(product: str) -> int | None:
 
 
 def merge(existing: list[int], fetched: list[int]) -> list[int]:
-    by_major = {n // 10000: n for n in existing}
-    for n in fetched:
-        by_major[n // 10000] = n
-    return sorted(by_major.values(), reverse=True)
+    result = list(existing)
+    free = set(range(len(result)))
+    for n in sorted(set(fetched)):
+        same_major = [i for i in free if result[i] // 10000 == n // 10000]
+        if same_major:
+            i = min(same_major, key=lambda i: abs(result[i] - n))
+            result[i] = n
+            free.discard(i)
+        else:
+            result.append(n)
+    return sorted(set(result), reverse=True)
 
 
 def update_toc(text: str, fetched: list[int]) -> str:

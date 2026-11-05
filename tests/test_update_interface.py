@@ -24,5 +24,9 @@ out = ui.update_toc(toc, [50505, 60000])
 assert out.startswith("## Interface: 60000, 50505, 38002, 20506, 11509\n"), out
 assert out.endswith("## Title: X\r\n")
 assert ui.update_toc(toc, []) == toc
+# Classic Era (1.15) and WoW Forever (1.60) share major 1 but must stay apart.
+assert ui.merge([20506, 16001, 11509], [11510]) == [20506, 16001, 11510]
+assert ui.merge([20506, 16001, 11509], [16002, 11509]) == [20506, 16002, 11509]
+assert ui.merge([120105, 16001], [120200]) == [120200, 16001]
 
 print("update_interface tests OK")

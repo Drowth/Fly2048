@@ -4,10 +4,11 @@ Fly2048 is a lightweight 2048 mini-game for World of Warcraft, designed for taxi
 
 ## Supported clients
 
+- WoW Forever, Interface `16001` (`Fly2048_Forever.toc`, and listed in the other two TOCs as well, because Forever builds have reported themselves as Mainline, as Classic and as their own project)
 - WoW Retail (`Fly2048_Mainline.toc`)
 - WoW Classic: progression Classic, Titan-Reforged, Classic Anniversary and Classic Era (`Fly2048.toc`)
 
-Both TOCs load the same guarded Lua file and SavedVariables schema, so fixes do not drift between editions. Every Blizzard API call that differs between clients is checked before use and has a fallback.
+Both TOCs load the same guarded Lua file and SavedVariables schema, so fixes do not drift between editions. The code never branches on `WOW_PROJECT_ID` or the client name: every Blizzard API call that differs between clients is checked before use and has a fallback, so a new client such as Forever works without special cases.
 
 ## Warcraft loot interface
 
@@ -29,6 +30,7 @@ Copy the `Fly2048` folder into the appropriate client directory:
 
 - Retail: `World of Warcraft/_retail_/Interface/AddOns/`
 - Classic Anniversary: `World of Warcraft/_anniversary_/Interface/AddOns/`
+- WoW Forever: `World of Warcraft/_forever_/Interface/AddOns/`
 
 The resulting path must end in `Interface/AddOns/Fly2048/Fly2048.lua`. Fully restart the WoW client after changing TOC files; `/reload` alone does not refresh TOC selection.
 

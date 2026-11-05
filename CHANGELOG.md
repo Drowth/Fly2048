@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added WoW Forever support (Interface 16001) with its own `Fly2048_Forever.toc`.
 - The TOCs now cover Retail plus progression Classic, Titan-Reforged, Classic Anniversary and Classic Era.
 - Fixed the player appearing twice on the guild leaderboard on realms with a space in the name.
 - Frames only request BackdropTemplate on clients that have it.

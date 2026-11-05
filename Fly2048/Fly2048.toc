@@ -1,4 +1,4 @@
-## Interface: 50504, 38002, 20506, 11509
+## Interface: 50504, 38002, 20506, 16001, 11509
 ## Title: Fly2048
 ## Notes: A 2048 mini game dressed in Warcraft loot, for flights, queues, and downtime
 ## Author: LeeGrieve
