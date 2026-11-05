@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Guild score sync runs silently in the background in any guild, on login, on joining or changing guild, and every five minutes. It no longer depends on the taxi auto-popup setting.
+- Guild boards are kept per guild, so alts in different guilds no longer share one board.
+- Sync no longer gives up when the client wrongly reports addon messages as restricted outside instances. A refused send retries after a minute.
+- Added `/fly2048 sync` to check guild sync status.
 - Added WoW Forever support (Interface 16001) with its own `Fly2048_Forever.toc`.
 - The TOCs now cover Retail plus progression Classic, Titan-Reforged, Classic Anniversary and Classic Era.
 - Fixed the player appearing twice on the guild leaderboard on realms with a space in the name.

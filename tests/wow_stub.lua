@@ -140,7 +140,11 @@ C_Timer = {
 
 C_ChatInfo = {
   RegisterAddonMessagePrefix = function() return true end,
-  SendAddonMessage = Noop,
+  SendAddonMessage = function(prefix, msg, channel)
+    Fly2048_TestSent[#Fly2048_TestSent + 1] = prefix .. "|" .. msg .. "|" .. channel
+    return Fly2048_TestSendResult
+  end,
+  IsAddonMessagePrefixRegistered = function() return true end,
   SendChatMessage = Noop,
   AreOutgoingAddonChatMessagesRestricted = function() return false end,
 }
@@ -157,7 +161,13 @@ ITEM_QUALITY_COLORS = {
   [6] = { r = 0.9, g = 0.8, b = 0.5 }, [7] = { r = 0, g = 0.8, b = 1 },
 }
 RAID_CLASS_COLORS = { MAGE = { r = 0.25, g = 0.78, b = 0.92 }, WARRIOR = { r = 0.78, g = 0.61, b = 0.43 } }
-function IsInGuild() return true end
+Fly2048_TestGuild = "Test Guild"
+Fly2048_TestSendResult = 0
+Fly2048_TestSent = {}
+function IsInGuild() return Fly2048_TestGuild ~= nil end
+function GetGuildInfo() if Fly2048_TestGuild then return Fly2048_TestGuild, "Member", 3, nil end end
+function IsInInstance() return false end
+function GetTime() return 100 end
 function UnitName() return "TestPilot" end
 function UnitFactionGroup() return "Horde", "Horde" end
 function UnitClass() return "Mage", "MAGE" end
